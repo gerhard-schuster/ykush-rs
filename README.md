@@ -66,11 +66,10 @@ Every push builds and tests on macOS and on Linux (arm64), see
 ### Linux
 
 The board is a file, `/dev/hidrawN`, which belongs to root until a udev rule hands it to a
-group. This rule gives it to `plugdev`, for the hidraw node as well as for the USB device:
+group. ykush3cmd reaches the board only through that node; this rule gives it to `plugdev`:
 
 ```
 # /etc/udev/rules.d/60-ykush3.rules
-SUBSYSTEM=="usb", ATTR{idVendor}=="04d8", ATTR{idProduct}=="f11b", MODE="0660", GROUP="plugdev"
 KERNEL=="hidraw*", ATTRS{idVendor}=="04d8", ATTRS{idProduct}=="f11b", MODE="0660", GROUP="plugdev"
 ```
 
@@ -540,10 +539,10 @@ tool would get it back.
 ### On Linux
 
 The same board on 2026-10-11, from a Raspberry Pi 4 under Debian 13 (kernel 6.18, aarch64),
-with an ST-Link debug probe on each of the three downstream ports and the udev rule from
-[Linux](#linux) in place. The switching and the comparison with `ykushcmd` ran on an early
-state of the Linux support, before `-l` kept succeeding and named every detached board, both
-test suites again on the state that added it:
+with an ST-Link debug probe on each of the three downstream ports and a udev rule that gave
+`plugdev` the hidraw node and also the USB device. The switching and the comparison with
+`ykushcmd` ran on an early state of the Linux support, before `-l` kept succeeding and named
+every detached board, both test suites again on the state that added it:
 
 | Area | What was run | Result |
 |---|---|---|
