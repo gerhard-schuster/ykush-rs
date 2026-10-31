@@ -13,7 +13,7 @@ pub fn print_version(out: &mut impl Write) -> Result<()> {
 }
 
 pub fn print_usage(out: &mut impl Write, program: &str) -> Result<()> {
-    writeln!(out, "Usage: {program} [-s SERIAL] COMMAND")?;
+    writeln!(out, "Usage: {program} [-s SERIAL] [--no-wait] COMMAND")?;
     writeln!(
         out,
         "Switch the ports of a YKUSH3 hub and read back its state."
@@ -61,6 +61,8 @@ Board.
   -l                 list the serial number of every attached board
   -s SERIAL          send the command to that board rather than to the
                      first one the system enumerates
+  --no-wait          fail at once when another ykush3cmd is using the
+                     board, instead of waiting up to 5 seconds for it
   --firmware-version, --bootloader-version
   --reset            restart the board
   --boot             stop in the bootloader, ready for a firmware image
@@ -111,6 +113,10 @@ mod tests {
         assert!(text.contains("Usage: ykush3cmd"));
         assert!(text.contains("--i2c-write"));
         assert!(text.contains("--bootloader-version"));
+        assert!(text.contains("--no-wait"));
+        // The text names the figure; this keeps the two together.
+        assert!(text.contains("up to 5 seconds"));
+        assert_eq!(ykush3::DEFAULT_WAIT, std::time::Duration::from_secs(5));
     }
 
     #[test]

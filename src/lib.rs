@@ -34,6 +34,7 @@ compile_error!("ykush3 is for macOS on Apple silicon and for Linux on aarch64");
 
 mod device;
 mod error;
+mod lock;
 mod sanitize;
 mod ykush3;
 
@@ -44,5 +45,6 @@ pub use crate::device::{
     detached_hint, list, Board, Report, Transport, PRODUCT_ID, REPORT_SIZE, VENDOR_ID,
 };
 pub use crate::error::{Error, Result};
+pub use crate::lock::DEFAULT_WAIT;
 pub use crate::sanitize::sanitize;
 pub use crate::ykush3::{Port, PortStatus, PowerOnState, Version, Ykush3, I2C_MAX_BYTES};

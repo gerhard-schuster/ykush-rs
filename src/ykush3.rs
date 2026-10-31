@@ -145,8 +145,17 @@ pub struct Ykush3<T: Transport = Board> {
 
 impl Ykush3<Board> {
     /// Opens a board over USB.
+    ///
+    /// When another invocation is using the board, waits up to
+    /// [`DEFAULT_WAIT`](crate::DEFAULT_WAIT) for it to finish.
     pub fn open(serial: Option<&str>) -> Result<Self> {
         Ok(Ykush3::with_transport(Board::open(serial)?))
+    }
+
+    /// Opens a board over USB, waiting at most `wait` for a board another
+    /// invocation is using. With `wait` zero, a board in use fails at once.
+    pub fn open_within(serial: Option<&str>, wait: std::time::Duration) -> Result<Self> {
+        Ok(Ykush3::with_transport(Board::open_within(serial, wait)?))
     }
 }
 

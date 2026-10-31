@@ -10,6 +10,7 @@ mod help;
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use cli::Command;
 use ykush3::{Error, Result, Transport, Ykush3};
@@ -60,7 +61,12 @@ fn run(program: &str, args: &[String], out: &mut impl Write) -> Result<()> {
         ),
 
         command => {
-            let board = Ykush3::open(invocation.serial.as_deref())?;
+            let wait = if invocation.no_wait {
+                Duration::ZERO
+            } else {
+                ykush3::DEFAULT_WAIT
+            };
+            let board = Ykush3::open_within(invocation.serial.as_deref(), wait)?;
             execute(&board, command, out)
         }
     }

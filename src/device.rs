@@ -13,6 +13,9 @@
 //! rule has to open up, and a hidraw node exists only while the kernel's HID
 //! driver is bound to the board. Both failures are reported in words here
 //! rather than as a bare errno or as a board that is not there.
+//!
+//! Opening also waits its turn when another invocation is using the board,
+//! see [`crate::lock`].
 
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
@@ -22,6 +25,7 @@ use async_hid::{AsyncHidRead, AsyncHidWrite, Device, DeviceReaderWriter, HidBack
 use futures_lite::{future, StreamExt};
 
 use crate::error::{Error, Result};
+use crate::lock::DEFAULT_WAIT;
 use crate::sanitize::sanitize;
 
 /// Microchip vendor id used by all Yepkit boards.
@@ -82,31 +86,64 @@ pub struct Board {
     /// Set when a read timed out. The answer may still arrive afterwards and
     /// would then be queued, so the next exchange empties the queue first.
     stale: Cell<bool>,
+
+    /// This process's turn at the board, see [`crate::lock`]. Declared last
+    /// so that it is dropped last: the next invocation must not get the turn
+    /// while this one still has the device open.
+    #[cfg(target_os = "linux")]
+    _turn: crate::lock::NodeLock,
 }
 
 impl Board {
     /// Opens the board with the given serial number, or the first board in the
     /// enumeration order when no serial number is provided.
+    ///
+    /// When another invocation is using the board, waits up to
+    /// [`DEFAULT_WAIT`](crate::DEFAULT_WAIT) for it to finish.
     pub fn open(serial: Option<&str>) -> Result<Self> {
-        future::block_on(async {
-            // Probing the device list first turns "nothing attached" into a
-            // clear message instead of a generic open failure.
-            let attached = attached_boards().await?;
-            let chosen = match serial {
-                Some(wanted) => attached.into_iter().find(|(known, _)| known == wanted),
-                None => attached.into_iter().next(),
-            };
+        Board::open_within(serial, DEFAULT_WAIT)
+    }
 
-            let Some((_, device)) = chosen else {
-                return Err(detached(serial).unwrap_or(Error::NotFound {
-                    serial: serial.map(str::to_owned),
-                }));
-            };
+    /// Like [`Board::open`], waiting at most `wait` for a board another
+    /// invocation is using. With `wait` zero, a board in use fails at once
+    /// with [`Error::Busy`].
+    pub fn open_within(serial: Option<&str>, wait: Duration) -> Result<Self> {
+        // Linux: the turn first, then the handle, so this process never has
+        // the board open while another one is in the middle of an exchange.
+        #[cfg(target_os = "linux")]
+        let (turn, dev) = {
+            let (_, device, turn) = crate::lock::take_stable(
+                wait,
+                || future::block_on(choose(serial)),
+                hidraw_node_of,
+                |node, found, left| crate::lock::NodeLock::take(node, found, left),
+            )?;
+            (turn, future::block_on(device.open()).map_err(open_failed)?)
+        };
 
-            Ok(Board {
-                dev: RefCell::new(device.open().await.map_err(open_failed)?),
-                stale: Cell::new(false),
-            })
+        // macOS: no lock; a refused open is repeated. With this transport the
+        // system does not refuse a second open, so this protects nothing yet,
+        // see crate::lock.
+        #[cfg(target_os = "macos")]
+        let dev = {
+            use crate::lock::Attempt;
+
+            let (found, device) = future::block_on(choose(serial))?;
+            crate::lock::wait_for(&found, wait, || match future::block_on(device.open()) {
+                Ok(dev) => Attempt::Got(dev),
+                Err(error) if refused_as_busy(&error) => Attempt::Busy(format!(
+                    "the system refused to open it, possibly because another program \
+                     has it open ({error})"
+                )),
+                Err(error) => Attempt::Failed(open_failed(error)),
+            })?
+        };
+
+        Ok(Board {
+            dev: RefCell::new(dev),
+            stale: Cell::new(false),
+            #[cfg(target_os = "linux")]
+            _turn: turn,
         })
     }
 
@@ -210,12 +247,12 @@ pub fn list() -> Result<Vec<String>> {
 
 /// What to tell a user whose operating system refused to open the board.
 #[cfg(target_os = "linux")]
-const PERMISSION_DENIED: &str = "Permission denied on the hidraw device of the \
+pub(crate) const PERMISSION_DENIED: &str = "Permission denied on the hidraw device of the \
 YKUSH3. Allow access with a udev rule, /etc/udev/rules.d/60-ykush3.rules as \
 shown in the README, make this user a member of the group the rule names, and \
 replug the board";
 #[cfg(not(target_os = "linux"))]
-const PERMISSION_DENIED: &str = "Permission denied on the YKUSH3";
+pub(crate) const PERMISSION_DENIED: &str = "Permission denied on the YKUSH3";
 
 /// Turns a refused open into an error that says what to do about it.
 ///
@@ -347,6 +384,76 @@ fn detached_interfaces(usb_devices: &std::path::Path, serial: Option<&str>) -> V
         })
         .cloned()
         .collect()
+}
+
+/// The board a command is meant for: the one with `serial`, or the first one
+/// in enumeration order. Returns its sanitised serial number with it.
+async fn choose(serial: Option<&str>) -> Result<(String, Device)> {
+    // Probing the device list first turns "nothing attached" into a clear
+    // message instead of a generic open failure.
+    let attached = attached_boards().await?;
+    let chosen = match serial {
+        Some(wanted) => attached.into_iter().find(|(known, _)| known == wanted),
+        None => attached.into_iter().next(),
+    };
+
+    chosen.ok_or_else(|| {
+        detached(serial).unwrap_or(Error::NotFound {
+            serial: serial.map(str::to_owned),
+        })
+    })
+}
+
+/// Whether macOS refused an open because the device is held elsewhere, which
+/// waiting may cure.
+///
+/// IOKit says so with `kIOReturnExclusiveAccess`, but the transport discards
+/// the return code and reports every refused open with the same message. So
+/// any refused open counts: a refusal that has another cause costs the wait
+/// and is then reported with the transport's own words.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn refused_as_busy(error: &async_hid::HidError) -> bool {
+    match error {
+        async_hid::HidError::Message(msg) => {
+            msg == "Failed to open device" || msg.contains("exclusive access")
+        }
+        _ => false,
+    }
+}
+
+/// The hidraw node of a board found by the transport.
+///
+/// On Linux the transport identifies a device by its directory in sysfs,
+/// `.../hidraw/hidrawN`, and opens the node named in the `uevent` file there.
+/// The lock goes on the same node.
+#[cfg(target_os = "linux")]
+fn hidraw_node_of(device: &Device) -> Result<std::path::PathBuf> {
+    let async_hid::DeviceId::DevPath(sysfs) = &device.id else {
+        return Err(Error::Device("The YKUSH3 has no hidraw device".into()));
+    };
+
+    hidraw_node(sysfs).ok_or_else(|| {
+        Error::Device(format!(
+            "No hidraw device node found for the YKUSH3 at {}",
+            sysfs.display()
+        ))
+    })
+}
+
+/// Reads `DEVNAME` from the `uevent` file in a hidraw directory of sysfs and
+/// turns it into the path under `/dev`. Only a plain `hidrawN` is taken, so a
+/// file that says something else cannot point the lock anywhere.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn hidraw_node(sysfs: &std::path::Path) -> Option<std::path::PathBuf> {
+    let uevent = std::fs::read_to_string(sysfs.join("uevent")).ok()?;
+    let name = uevent
+        .lines()
+        .find_map(|line| line.strip_prefix("DEVNAME="))?
+        .trim();
+    let number = name.strip_prefix("hidraw")?;
+
+    (!number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| std::path::Path::new("/dev").join(name))
 }
 
 /// Every attached board, as its sanitised serial number and the handle it was
@@ -524,6 +631,51 @@ mod tests {
     }
 
     #[test]
+    fn the_hidraw_node_is_read_from_sysfs() {
+        let sysfs = FakeSysfs::new("node");
+        sysfs.file(
+            "hidraw/hidraw3/uevent",
+            "MAJOR=241\nMINOR=3\nDEVNAME=hidraw3",
+        );
+
+        assert_eq!(
+            hidraw_node(&sysfs.0.join("hidraw/hidraw3")),
+            Some(std::path::PathBuf::from("/dev/hidraw3"))
+        );
+    }
+
+    #[test]
+    fn a_node_name_that_is_not_hidraw_is_refused() {
+        let sysfs = FakeSysfs::new("badnode");
+        sysfs
+            .file("a/uevent", "DEVNAME=../sda")
+            .file("b/uevent", "DEVNAME=hidraw")
+            .file("c/uevent", "DEVNAME=hidraw1/../../sda")
+            .file("d/uevent", "MAJOR=241");
+
+        for dir in ["a", "b", "c", "d", "missing"] {
+            assert_eq!(hidraw_node(&sysfs.0.join(dir)), None, "{dir}");
+        }
+    }
+
+    #[test]
+    fn only_a_refused_open_counts_as_a_board_in_use() {
+        use async_hid::HidError;
+
+        assert!(refused_as_busy(&HidError::message("Failed to open device")));
+        assert!(refused_as_busy(&HidError::message(
+            "exclusive access and device already open"
+        )));
+        assert!(!refused_as_busy(&HidError::NotConnected));
+        assert!(!refused_as_busy(&HidError::message(
+            "Failed to read input report size"
+        )));
+        assert!(!refused_as_busy(&os_error(
+            std::io::ErrorKind::PermissionDenied
+        )));
+    }
+
+    #[test]
     fn an_unreadable_device_directory_reports_nothing() {
         let missing = std::env::temp_dir().join("ykush3-sysfs-does-not-exist");
 
@@ -580,6 +732,81 @@ mod tests {
             let answer = board.transfer(&report(&[0x61, 0x01])).expect("answer");
 
             assert_eq!(answer[1], 0x61);
+        }
+
+        /// Keeps one handle open and reads port states over and over, the way
+        /// a test rig polls a board. Every answer has to arrive within the
+        /// read timeout. Read-only: the ports power real boards, so nothing
+        /// is switched.
+        ///
+        /// 2000 reads by default; `YKUSH3_SOAK_COUNT` sets another number.
+        /// Run with `--nocapture` to see the count and the slowest answer.
+        #[test]
+        #[ignore = "needs a YKUSH3 attached"]
+        fn a_held_handle_answers_every_status_read_in_time() {
+            use crate::ykush3::{Port, Ykush3};
+            use std::time::Instant;
+
+            attached();
+            let count: u32 = std::env::var("YKUSH3_SOAK_COUNT")
+                .map(|n| n.parse().expect("YKUSH3_SOAK_COUNT should be a number"))
+                .unwrap_or(2000);
+
+            let board = Ykush3::open(None).expect("the first board should open");
+            let mut slowest = Duration::ZERO;
+            let started = Instant::now();
+
+            for i in 0..count {
+                let port = Port::Downstream(1 + (i % 3) as u8);
+                let sent = Instant::now();
+                board
+                    .port_status(port)
+                    .unwrap_or_else(|e| panic!("read {} of {count}, {port:?}: {e}", i + 1));
+                let took = sent.elapsed();
+
+                assert!(
+                    took < READ_TIMEOUT,
+                    "read {} of {count} took {took:?}",
+                    i + 1
+                );
+                slowest = slowest.max(took);
+            }
+
+            println!(
+                "soak: {count} status reads in {:?}, slowest answer {slowest:?}",
+                started.elapsed()
+            );
+        }
+
+        /// A board this process holds is not handed out a second time. On
+        /// Linux that is the flock. On macOS it would be the system refusing
+        /// the second open, which it does not do today: the transport opens
+        /// without asking for exclusive access, so the second open goes
+        /// through. The test is therefore expected to fail there until the
+        /// planned seize-mode open in the transport, which is expected to
+        /// change that (not yet measured). If it does, the expectation below
+        /// makes the test fail, as a reminder to drop it.
+        /// Read-only: nothing is sent to the board.
+        #[test]
+        #[ignore = "needs a YKUSH3 attached"]
+        #[cfg_attr(
+            target_os = "macos",
+            should_panic(expected = "a second open should be refused as busy")
+        )]
+        fn a_held_board_is_not_opened_a_second_time() {
+            attached();
+
+            let first = Board::open(None).expect("the first board should open");
+            let second = Board::open_within(None, Duration::ZERO);
+
+            assert!(
+                matches!(&second, Err(Error::Busy { .. })),
+                "a second open should be refused as busy, got {:?}",
+                second.as_ref().err()
+            );
+            drop(first);
+            Board::open_within(None, Duration::ZERO)
+                .expect("the board should open again once the first handle is gone");
         }
 
         #[test]

@@ -31,9 +31,41 @@ reached and who may open it.
   on the bus whose HID driver is detached, or `None`. Always `None` outside
   Linux.
 - CI builds, lints and tests on Linux (arm64) as well as on macOS.
+- Concurrent invocations take turns at a board. The second one waits until
+  the first is done, up to five seconds, and then fails with exit status 1
+  and a message naming the board. On Linux the turn is an advisory `flock`
+  on the board's hidraw node, which the kernel releases when the process
+  ends; no lock file is involved. Before this, two invocations on Linux could
+  read each other's answers: two loops asking for ports 1 and 2 in parallel
+  failed in 225 of 450 runs, and none fail now.
+- On macOS, concurrent invocations are not serialized yet. macOS does not
+  refuse a second open with the current transport, so answers can reach the
+  wrong process: the same two loops failed in 2534 of 5073 runs. A status
+  read detects it through the port check, a switching command does not
+  reliably. The rule is one invocation at a time per board; README and
+  `SECURITY.md` say so. Planned: an open in seize mode in the transport,
+  expected to make macOS refuse a second open (not yet measured). A refused
+  open is already retried; today that happens only for an open refused for
+  another reason, such as an unplugged board or a missing permission, and
+  then costs the wait.
+- `--no-wait`: fail at once when the board is in use, instead of waiting.
+- `Board::open_within()` and `Ykush3::open_within()` take the time to wait,
+  `DEFAULT_WAIT` is the five seconds `open()` waits, and `Error::Busy` is
+  what both return when the time is up.
+- The lock serializes `ykush3cmd` instances only. Another tool on the same
+  board, Yepkit's `ykushcmd` among them, is not held back; README and
+  `SECURITY.md` say so and recommend one YKUSH3 tool per host.
+- A hardware test that reads port states 2000 times over one held handle,
+  read-only; `YKUSH3_SOAK_COUNT` changes the number.
 
 ### Changed
 
+- **Breaking, so the next release is 0.5.0.** `Error` has a new variant,
+  `Busy`, and is now `#[non_exhaustive]`, so a `match` on it outside this
+  crate needs a catch-all arm; later variants will not break it again.
+  `Ykush3::open()` and `Board::open()` now wait up to five seconds for a
+  board another process is using, where they used to fail or share it at
+  once; `open_within(serial, Duration::ZERO)` is the old immediate answer.
 - The release profile turns on link time optimisation and a single codegen
   unit. The binary goes from 557 to 407 kB, a third less, and a clean build
   takes about a second longer. Neither setting changes behaviour.
@@ -42,6 +74,9 @@ reached and who may open it.
 - The transport follows its revision on the fork, which moved when
   sidit77/async-hid#50 was merged and the branch was rebased onto it. The tree
   at the new revision is byte for byte the tree at the old one.
+
+- An unknown option is named correctly when `-s` comes first: `-s A -x`
+  used to report `-s` as the unknown option.
 
 - `tests/encoding.rs` holds every file in the repository to valid UTF-8 within
   Latin-1: no character above U+00FF, and none of the Latin-1 characters that

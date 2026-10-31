@@ -5,7 +5,10 @@ use std::fmt;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Not exhaustive: a new way to fail is not a breaking change for a caller
+/// that already handles the ones it knows and passes the rest on.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// The command line could not be interpreted.
     Usage(String),
@@ -18,6 +21,17 @@ pub enum Error {
     Hid(String),
     /// The board did not answer within the read timeout.
     NoResponse,
+    /// The board could not be taken because another invocation had it, and
+    /// it did not come free in time. On macOS the reason is a guess: the
+    /// system refused the open without saying why.
+    Busy {
+        /// The board, by its serial number.
+        serial: String,
+        /// How long was waited; zero when waiting was not asked for.
+        waited: std::time::Duration,
+        /// Who has the board, as far as can be told.
+        cause: String,
+    },
     /// The board answered, but reported a failure or an unexpected report.
     Device(String),
     /// Writing the output failed.
@@ -34,6 +48,20 @@ impl fmt::Display for Error {
             Error::NotFound { serial: None } => write!(f, "No YKUSH3 board found"),
             Error::Hid(e) => write!(f, "USB HID error: {e}"),
             Error::NoResponse => write!(f, "No response from the board"),
+            Error::Busy {
+                serial,
+                waited,
+                cause,
+            } if waited.is_zero() => write!(f, "The YKUSH3 {serial} is not available: {cause}"),
+            Error::Busy {
+                serial,
+                waited,
+                cause,
+            } => write!(
+                f,
+                "The YKUSH3 {serial} is still not available after {:.1} s: {cause}",
+                waited.as_secs_f64()
+            ),
             Error::Device(msg) => write!(f, "{msg}"),
             Error::Io(e) => write!(f, "Output error: {e}"),
         }
@@ -87,6 +115,22 @@ mod tests {
             ),
             (Error::NotFound { serial: None }, "No YKUSH3 board found"),
             (Error::NoResponse, "No response from the board"),
+            (
+                Error::Busy {
+                    serial: "Y3N13808".into(),
+                    waited: std::time::Duration::from_secs(5),
+                    cause: "another ykush3cmd is using it".into(),
+                },
+                "The YKUSH3 Y3N13808 is still not available after 5.0 s: another ykush3cmd is using it",
+            ),
+            (
+                Error::Busy {
+                    serial: "Y3N13808".into(),
+                    waited: std::time::Duration::ZERO,
+                    cause: "another ykush3cmd is using it".into(),
+                },
+                "The YKUSH3 Y3N13808 is not available: another ykush3cmd is using it",
+            ),
             (
                 Error::Device("the board said no".into()),
                 "the board said no",

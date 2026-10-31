@@ -39,8 +39,18 @@ pub enum Command {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Invocation {
     pub serial: Option<String>,
+    /// `--no-wait`: fail at once when another invocation is using the board,
+    /// rather than waiting for it.
+    pub no_wait: bool,
     pub command: Command,
 }
+
+/// Options that modify how a command runs rather than being one.
+fn is_modifier(opt: &Opt) -> bool {
+    opt.name == "-s" || opt.name == NO_WAIT
+}
+
+const NO_WAIT: &str = "--no-wait";
 
 /// One option of the command line together with its parameters.
 #[derive(Debug, PartialEq, Eq)]
@@ -70,12 +80,13 @@ pub fn parse(args: &[String]) -> Result<Invocation> {
     };
     let opts = split(args)?;
 
-    let Some(first) = opts.first() else {
+    if opts.is_empty() {
         return Ok(Invocation {
             serial: None,
+            no_wait: false,
             command: Command::Help,
         });
-    };
+    }
 
     // The serial number selects the board for whichever command follows, so it
     // is picked up before the command itself. Two serial numbers on one line
@@ -92,21 +103,38 @@ pub fn parse(args: &[String]) -> Result<Invocation> {
         ));
     }
 
+    // Saying it twice says nothing new, so that is accepted. A value is not:
+    // the option takes none, and a stray word after it is a mistake.
+    let mut no_wait = false;
+    for opt in opts.iter().filter(|o| o.name == NO_WAIT) {
+        if let Some(value) = opt.params.first() {
+            return Err(Error::Usage(format!(
+                "Option {NO_WAIT} takes no value, got '{value}'"
+            )));
+        }
+        no_wait = true;
+    }
+
     for opt in &opts {
-        if opt.name == "-s" {
+        if is_modifier(opt) {
             continue;
         }
         if let Some(command) = command(opt)? {
-            return Ok(Invocation { serial, command });
+            return Ok(Invocation {
+                serial,
+                no_wait,
+                command,
+            });
         }
     }
 
     // Nothing on the line was a command.
-    Err(Error::Usage(if opts.len() == 1 && first.name == "-s" {
-        "No command given".to_owned()
-    } else {
-        format!("Unknown option {}", first.name)
-    }))
+    Err(Error::Usage(
+        match opts.iter().find(|opt| !is_modifier(opt)) {
+            None => "No command given".to_owned(),
+            Some(unknown) => format!("Unknown option {}", unknown.name),
+        },
+    ))
 }
 
 /// Maps one option to a command. `None` for an option that is not a command, so
@@ -404,6 +432,52 @@ mod tests {
             usage_error("-s A -s B -d 1"),
             "The serial number can only be given once"
         );
+    }
+
+    // -- waiting for the board --------------------------------------------
+
+    #[test]
+    fn by_default_a_busy_board_is_waited_for() {
+        assert!(!parse(&args("-g 1")).unwrap().no_wait);
+    }
+
+    #[test]
+    fn no_wait_may_stand_anywhere_on_the_line() {
+        for line in ["--no-wait -g 1", "-g 1 --no-wait", "-s A --no-wait -g 1"] {
+            let inv = parse(&args(line)).unwrap();
+
+            assert!(inv.no_wait, "{line}");
+            assert_eq!(
+                inv.command,
+                Command::PortStatus(Port::Downstream(1)),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_wait_given_twice_is_still_no_wait() {
+        assert!(parse(&args("--no-wait --no-wait -g 1")).unwrap().no_wait);
+    }
+
+    #[test]
+    fn no_wait_takes_no_value() {
+        assert_eq!(
+            usage_error("--no-wait 5 -g 1"),
+            "Option --no-wait takes no value, got '5'"
+        );
+    }
+
+    #[test]
+    fn no_wait_alone_is_not_a_command() {
+        assert_eq!(usage_error("--no-wait"), "No command given");
+        assert_eq!(usage_error("-s A --no-wait"), "No command given");
+    }
+
+    #[test]
+    fn an_unknown_option_is_named_even_after_a_modifier() {
+        assert_eq!(usage_error("--no-wait -x"), "Unknown option -x");
+        assert_eq!(usage_error("-s A -x"), "Unknown option -x");
     }
 
     // -- port commands ----------------------------------------------------

@@ -84,7 +84,7 @@ sudo usermod -aG plugdev "$USER"      # takes effect at the next login
 Without the rule, every command that opens the board fails and names the rule file. `-l`
 works without it, since listing reads `/sys` and opens nothing.
 
-Two things work differently from macOS:
+Three things work differently from macOS:
 
 - **The kernel's HID driver has to be bound to the board.** A program that drives the
   YKUSH3 through libusb - Yepkit's `ykushcmd`, the Debian package `ykush-control` among
@@ -95,9 +95,17 @@ Two things work differently from macOS:
   example `echo -n 1-1.4.4:1.0 | sudo tee /sys/bus/usb/drivers/usbhid/bind` with the
   interface name from the message.
 - **The board is not opened exclusively.** Linux lets several programs open the hidraw node
-  at once and delivers every answer to all of them. Two invocations running at the same time
-  can then read each other's answers, so a script has to run them one after the other. macOS
-  behaves the same way, see the limits below.
+  at once and delivers every answer to all of them, so two programs talking to the board at
+  the same time can read each other's answers. Invocations of `ykush3cmd` take turns: each
+  one takes an advisory `flock` on the board's `/dev/hidrawN` before it opens the board, and
+  the next one waits for it, see [Concurrent invocations](#concurrent-invocations). No lock
+  file is involved; the kernel drops the lock when the process ends, crash included.
+- **Other tools are not covered by that lock.** Yepkit's `ykushcmd`, or any other HID tool,
+  run against the same board while `ykush3cmd` is running is not held back. A build of such a
+  tool that goes through hidraw opens the node beside this program, and answers can reach
+  the wrong process. A build that goes through libusb detaches the kernel's HID driver,
+  and the board disappears from under this program, see the point above. **Use one YKUSH3
+  tool per host.**
 
 ## Using it
 
@@ -123,6 +131,7 @@ a script that only looks at the exit status does not.
 | `-on` / `-off` | switch the external 5V output |
 | `-l` | list the attached boards |
 | `-s <serial>` | address the board with that serial number |
+| `--no-wait` | fail at once when another invocation is using the board, see below |
 | `-c 1\|2\|3\|e 0\|1\|2` | configure the power-on state (off / on / last state) |
 | `-r 1\|2\|3` | read a GPIO pin |
 | `-w 1\|2\|3 0\|1` | drive a GPIO pin |
@@ -137,8 +146,8 @@ a script that only looks at the exit status does not.
 | `--firmware-version` / `--bootloader-version` | print the versions |
 | `-v`, `--version` / `-h`, `--help` | version and help |
 
-Exit status: `0` on success, `1` on failure - board not found, invalid input, or the board
-rejecting the command.
+Exit status: `0` on success, `1` on failure - board not found, board busy, invalid input,
+or the board rejecting the command.
 
 ```
 $ ykush3cmd -l
@@ -152,6 +161,50 @@ $ ykush3cmd -c 2 1                # port 2 comes up on the next reset
 $ ykush3cmd --firmware-version
 Firmware 1.5.0
 ```
+
+### Concurrent invocations
+
+Two invocations addressing the same board at the same time take turns: the second waits
+until the first is done, **up to 5 seconds**, and then gives up with exit status `1`:
+
+```
+$ ykush3cmd -g 1
+The YKUSH3 Y3N13808 is still not available after 5.0 s: another ykush3cmd is using it
+$ ykush3cmd --no-wait -g 1
+The YKUSH3 Y3N13808 is not available: another ykush3cmd is using it
+```
+
+One invocation holds the board for a few milliseconds, so five seconds lets dozens of them
+queue up without any failing. A board taken for longer than that is held by something that
+does not let go after one command - a program keeping a handle open, or one stuck in its own
+five second read timeout - and waiting longer would not help. `--no-wait` is for a script
+that would rather retry on its own terms.
+
+How the turn is held differs:
+
+- **Linux**: an advisory `flock(LOCK_EX)` on the board's `/dev/hidrawN`, taken on a second
+  file opened only for that. The node is found through sysfs, the same way the HID library
+  finds the board. The kernel releases the lock when the process ends, however it ends. The
+  lock orders the instances of this program, and programs built on its library, among
+  themselves - nothing else asks for it, see [Linux](#linux).
+- **macOS**: **not serialized today.** macOS does not refuse a second open with the current
+  transport, so concurrent invocations run side by side and an answer can reach the wrong
+  process. Measured on 2026-10-11: two loops asking for ports 1 and 2 at the same time
+  failed in 2534 of 5073 runs, each failure an answer meant for the other loop. A status
+  read notices this, because the answer names the port and is checked against the request.
+  A switching command does not reliably notice it: identical commands are echoed
+  identically, so an answer taken from another process looks like one's own. The refusal
+  the README used to describe was seen with the earlier `hidapi` transport, which asked for
+  exclusive access; the current one does not.
+
+  **Rule on macOS: one invocation at a time per board.** Planned: an open in seize mode in
+  the transport, expected to make macOS refuse a second open (not yet measured). The code
+  already repeats a refused open until the time is up. Today that happens only for an open
+  refused for another reason, such as a board being unplugged or a missing permission, and
+  then costs the wait before the error is reported. The hardware test `a_held_board_is_not_opened_a_second_time` is
+  marked as expected to fail on macOS until then.
+
+Boards with different serial numbers do not wait for each other.
 
 ## The hardware
 
@@ -298,6 +351,7 @@ touches the board, and the `ykush3cmd` **binary**, a command line front end on t
 |---|---|---|
 | `src/lib.rs` | library | the public surface, everything re-exported at the root |
 | `src/device.rs` | library | the `Transport` trait and `Board`, its HID implementation |
+| `src/lock.rs` | library | taking turns at a board: the wait, and the `flock` on Linux |
 | `src/ykush3.rs` | library | the protocol: opcodes, reports, reading the answers |
 | `src/fake.rs` | library | `FakeBoard`, the test double for the transport, behind the `fake` feature |
 | `src/sanitize.rs` | library | the control character filter for text from outside |
@@ -342,6 +396,12 @@ Foundation. That is two report sized buffers per open which IOKit keeps rather t
 releases on close. hidapi grows by the same amount per open, because the cost sits below
 both of them, where neither can reach it.
 
+`Ykush3::open` and `Board::open` wait up to `DEFAULT_WAIT`, five seconds, for a board
+another process is using, and fail with `Error::Busy` after that; `open_within` takes the
+limit, and a limit of zero fails at once. On Linux a held `Board` keeps its lock for as long
+as it lives, so a long running program makes every `ykush3cmd` invocation on that board
+wait - or fail, if it holds on for longer than they wait.
+
 `FakeBoard` ships with the library, so code built on it can be tested the same way this
 repository tests itself, against a prepared answer instead of a board. It sits behind the
 `fake` feature, because its inspection methods panic on misuse as test helpers should; a
@@ -366,10 +426,11 @@ command line application.
 ## Tests
 
 ```
-cargo test                                    # 116 tests and a doctest, no
-                                              # hardware needed
-cargo test -- --ignored --test-threads=1      # 9 more: 7 need a board, 2 only
-                                              # the HID stack of the system
+cargo test                                    # 139 tests and a doctest, no
+                                              # hardware needed (144 on Linux)
+cargo test -- --ignored --test-threads=1      # 11 more: 9 need a board, 2 only
+                                              # the HID stack of the system;
+                                              # on Linux 3 more that need a board
 ```
 
 Every push runs the first line on macOS and on Linux, along with `cargo fmt --check`, `cargo clippy`
@@ -382,16 +443,22 @@ read each other's answers.
 
 | Group | Tests | Subject |
 |---|---|---|
-| `cli` | 30 | grammar, board selection, every command, every error message |
+| `cli` | 36 | grammar, board selection, `--no-wait`, every command, every error message |
 | `ykush3` | 39 | the bytes each command sends, reading answers, error paths, a swept and a hand-picked pass over generated answers |
 | `main` | 15 | output format, dispatch of every command, program name |
-| `error`, `help`, `device`, `sanitize` | 17 | error texts, help output, report padding, the Linux permission and driver diagnostics, the character filter |
-| `tests/cli.rs` | 9 | the built binary: exit codes, stdout versus stderr |
+| `error`, `help`, `device`, `sanitize` | 20 | error texts, help output, report padding, the Linux permission and driver diagnostics, the hidraw node from sysfs, the character filter |
+| `lock` | 12, on Linux 17 | two invocations hold the board one after the other, waiting runs out at the limit, `--no-wait` makes one attempt, a failed command lets go, a node that moves while it is locked is let go; on Linux the same against a real `flock` on a temporary file |
+| `tests/cli.rs` | 11 | the built binary: exit codes, stdout versus stderr |
 | `tests/encoding.rs` | 6 | every file is valid UTF-8 within Latin-1, and the rule itself |
 | doctest | 1 | the library example compiles; `no_run`, since it needs a board |
-| **running without hardware** | **116 + 1** | |
-| `--ignored`, needs a board | 7 | opening and real exchanges, the acknowledged switch, the echoed pin and port |
+| **running without hardware** | **139 + 1**, on Linux **144 + 1** | |
+| `--ignored`, needs a board | 9, on Linux 12 | opening and real exchanges, the acknowledged switch, the echoed pin and port, 2000 status reads on one handle, a second open of a held board refused as busy (expected to fail on macOS today, see above); on Linux the built binary against a lock held by another process, with and without `--no-wait` |
 | `--ignored`, needs only the HID stack | 2 | enumeration when nothing is attached |
+
+The long one among the board tests reads port states 2000 times over one handle and checks
+that every answer comes within the read timeout. It only reads, since the ports may power
+real devices. `YKUSH3_SOAK_COUNT` sets another number, and `--nocapture` shows the count and
+the slowest answer.
 
 The `FakeBoard` transport records what a command sends and feeds prepared answers back.
 That pins the wire bytes of every command against the vendor reference. A `FakeBoard::mute()`
@@ -476,8 +543,9 @@ tool would get it back.
 
 The same board on 2026-10-11, from a Raspberry Pi 4 under Debian 13 (kernel 6.18, aarch64),
 with an ST-Link debug probe on each of the three downstream ports and the udev rule from
-[Linux](#linux) in place. The switching and the comparison with `ykushcmd` ran on commit
-`ca13204`, both test suites again on `3b889a6`:
+[Linux](#linux) in place. The switching and the comparison with `ykushcmd` ran on an early
+state of the Linux support, before `-l` named detached boards, both test suites again on the
+state that added it:
 
 | Area | What was run | Result |
 |---|---|---|
@@ -486,6 +554,32 @@ with an ST-Link debug probe on each of the three downstream ports and the udev r
 | Port state | `-g 1` through `-g 3`, compared with `ykushcmd ykush3 -g` | the same states |
 | Port switching | `-d`, then `-u`, on each port in turn, checked with `lsusb` | the probe on that port, and only that one, left the bus and came back within about a second |
 | Detached driver | `ykushcmd` run first, then this program | reported with the interface name; binding `usbhid` again restores access |
+
+Taking turns, on the same Pi and board on 2026-10-11, every step read-only. The runs were
+taken on an earlier state of the change, which differs from the final one only in not
+looking the node up again after locking; `cargo test` passed on the final state as well,
+but the board had moved to the Mac before the hardware runs could be repeated:
+
+| Area | What was run | Result |
+|---|---|---|
+| Test suite | `cargo test` and the ignored tests except the one that re-applies a port state | 139 + 1 and 9 pass |
+| Held handle | 2000 status reads on one handle | all answered, slowest 4.0 ms, 6.0 s in all |
+| Two loops of `-g 1` | in parallel for 30 s | 1190 and 1220 runs, no error, no wrong answer |
+| `-g 1` against `-g 2` | in parallel for 30 s | 1298 and 1227 runs, no error, no wrong answer |
+| The same, previous build | in parallel for 15 s | 225 errors in 450 runs, each an answer describing the other port |
+| A held lock | `flock /dev/hidraw0 sleep 8` beside `-g 1` | waits 5.0 s and exits 1; with `--no-wait` exits 1 after 10 ms |
+
+The comparison against `-g 2` is the one that tells: two loops asking about the same port get
+byte-identical answers, so a crossed answer would go unnoticed there.
+
+The same board on a Mac on 2026-10-11, on this change before the held-board test was marked
+as expected to fail there, every step read-only:
+
+| Area | What was run | Result |
+|---|---|---|
+| Test suite | the ignored tests except the one that re-applies a port state | 9 pass, `a_held_board_is_not_opened_a_second_time` fails: the second open succeeds |
+| Held handle | 2000 status reads on one handle | all answered, slowest 3.0 ms, 4.0 s in all |
+| `-g 1` against `-g 2` | in parallel for 30 s | 2536 and 2537 runs, 1260 and 1274 errors, each an answer describing the other port |
 
 What turned up beyond what the documentation says:
 
@@ -510,10 +604,11 @@ What turned up beyond what the documentation says:
 - **A bus scan across all 7 bit addresses** (`0x08`-`0x77`) ran through without a single
   answer with nothing on the I2C header, so the method is sound for finding a device once
   one is there.
-- **A second open is not refused.** Since the transport moved to `async-hid`, macOS lets a
-  second invocation open the board while the first one holds it, and every answer reaches
-  both, so concurrent invocations of `ykush3cmd` have to take turns. Linux behaves the same,
-  see [Linux](#linux).
+- **The board could only be open once** on macOS with the earlier `hidapi` transport. A
+  second attempt failed with "exclusive access and device already open". With the current
+  transport that no longer holds: a second open succeeds and both handles receive every
+  answer, see [Concurrent invocations](#concurrent-invocations). Linux does not refuse the
+  second open either, see [Linux](#linux).
 - **The connector is the most common fault.** When the USB 3.0 micro-B plug is not seated
   fully, only the SuperSpeed hub appears; the USB 2.0 hub and the controller are missing and
   the board cannot be reached even though the power LED is lit. Check the plug before

@@ -31,6 +31,12 @@ async-hid = { version = "0.5", git = "https://github.com/gerhard-schuster/async-
 async-io = "2"
 futures-lite = "2"
 
+# Linux only: flock on the hidraw node, so that concurrent invocations take
+# turns at a board. Already in the tree through async-io, at the same version
+# and with the same feature; naming it here adds no crate to the build.
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+
 [dev-dependencies]
 # This package's own tests - the binary's included - use FakeBoard, which
 # sits behind the feature. A dev-dependency of the package on itself is how
