@@ -21,12 +21,17 @@ anything reachable through the command line.
 Out of scope, because they are properties of the hardware rather than of this
 program:
 
-- that any local process can open the device and switch ports or drop the board
-  into its bootloader - macOS grants HID devices to whoever asks first, and this
-  program neither adds nor could add a check there
+- that any local process allowed to open the device can switch ports or drop the
+  board into its bootloader - macOS hands HID devices to any process that asks,
+  on Linux the udev rule decides who may open the hidraw node, and this program
+  neither adds nor could add a check there
 - firmware behaviour of the board itself, which belongs to Yepkit
-- denial of service by holding the device open; the operating system hands it out
-  exclusively and only one program can have it at a time
+- denial of service by another program that opens the device exclusively, a
+  seize on macOS, which makes this program's opens and writes fail while it
+  holds the device
+- interference between programs that have the device open at once: neither
+  macOS nor Linux opens it exclusively for this program, and every answer
+  reaches all of them
 
 ## What has already been looked at
 

@@ -61,7 +61,8 @@ cargo test -- --ignored --test-threads=1    # only with a board attached
   `Transport` trait; `FakeBoard` records the bytes that go out and feeds answers back. A new
   command without a test pinning its wire bytes will not be taken.
 - **Hardware tests** are marked `#[ignore]` and run one at a time (`--test-threads=1`),
-  because the operating system hands out HID devices exclusively.
+  because every answer of the board reaches every open handle, so tests running side by
+  side would read each other's answers.
 - **Protocol changes need evidence**: a place in the vendor documentation, or a measurement
   reproduced on real hardware. Guessing is not enough.
 

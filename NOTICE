@@ -57,7 +57,8 @@ Third party components
 ----------------------
 
 No third party C library is vendored or linked. The program reaches the device
-through Apple's IOKit framework, from Rust.
+through Apple's IOKit framework on macOS and through the kernel's hidraw
+interface on Linux, from Rust.
 
 Every crate that goes into the binary is under MIT or Apache-2.0 terms; they
 are listed with their licenses in THIRD-PARTY-NOTICES.md.

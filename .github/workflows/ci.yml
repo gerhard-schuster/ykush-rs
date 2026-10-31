@@ -24,12 +24,20 @@ env:
 #
 # Checkouts do not persist credentials: the jobs run code from the checkout
 # (build scripts, tests), which must not find a token lying in .git/config.
+#
+# Every job runs on both supported systems. The Linux runner is arm64 because
+# the source compiles for Linux on aarch64 only; ubuntu-latest is x86_64 and
+# would stop at the compile_error! in src/lib.rs.
 
 jobs:
   # The hardware tests are #[ignore]d and stay out of this; what runs here is
   # everything that needs no board.
   test:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -41,13 +49,17 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-
       - run: cargo build --release --locked
       - run: cargo test --locked
 
   lint:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -59,15 +71,19 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked
 
   # Checks that the rust-version in Cargo.toml is the truth rather than a wish.
   minimum-supported-rust:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:

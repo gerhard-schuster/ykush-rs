@@ -23,11 +23,14 @@
 //! prepared queue and records what would have been sent. The feature is off
 //! by default, so the plain library carries no test gear.
 
-// This library is written for macOS on Apple silicon, and has only ever been
-// built and run there. Anywhere else it refuses to compile rather than produce
-// a binary nobody has tried.
-#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
-compile_error!("ykush3 is for macOS on Apple silicon");
+// This library is built and run against a board on two systems: macOS on
+// Apple silicon, and Linux on 64 bit Arm (a Raspberry Pi 4 under Debian).
+// Anywhere else it refuses to compile rather than produce a binary nobody has
+// tried. Nothing in the code is tied to the processor; Linux on x86_64 stays
+// out only because no board has been driven from it, and taking it in is this
+// line plus a hardware run.
+#[cfg(not(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux"))))]
+compile_error!("ykush3 is for macOS on Apple silicon and for Linux on aarch64");
 
 mod device;
 mod error;
@@ -37,7 +40,9 @@ mod ykush3;
 #[cfg(any(test, feature = "fake"))]
 pub mod fake;
 
-pub use crate::device::{list, Board, Report, Transport, PRODUCT_ID, REPORT_SIZE, VENDOR_ID};
+pub use crate::device::{
+    detached_hint, list, Board, Report, Transport, PRODUCT_ID, REPORT_SIZE, VENDOR_ID,
+};
 pub use crate::error::{Error, Result};
 pub use crate::sanitize::sanitize;
 pub use crate::ykush3::{Port, PortStatus, PowerOnState, Version, Ykush3, I2C_MAX_BYTES};

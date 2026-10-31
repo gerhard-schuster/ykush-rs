@@ -2,11 +2,17 @@
 //! USB HID transport for the YKUSH3 board.
 //!
 //! Talks to the board through async-hid, which reaches the device by way of
-//! IOKit. That library is asynchronous because that is how the operating
-//! system delivers HID reports - it hands out callbacks on a run loop rather
-//! than a blocking read. This program is not asynchronous and has no reason to
-//! be, so the awaits are resolved here and everything above the [`Transport`]
-//! trait stays as synchronous as it was.
+//! IOKit on macOS and through the kernel's hidraw interface on Linux. That
+//! library is asynchronous because that is how macOS delivers HID reports - it
+//! hands out callbacks on a run loop rather than a blocking read. This program
+//! is not asynchronous and has no reason to be, so the awaits are resolved here
+//! and everything above the [`Transport`] trait stays as synchronous as it was.
+//!
+//! The report exchange is the same on both systems. What differs is the way to
+//! the device: Linux guards `/dev/hidraw*` with file permissions, which a udev
+//! rule has to open up, and a hidraw node exists only while the kernel's HID
+//! driver is bound to the board. Both failures are reported in words here
+//! rather than as a bare errno or as a board that is not there.
 
 use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
@@ -69,8 +75,8 @@ pub(crate) fn report(payload: &[u8]) -> Report {
 pub struct Board {
     /// Every exchange needs the handle mutably while [`Transport`] hands out a
     /// shared reference. A cell bridges the two, which costs nothing here: a
-    /// board is driven from one thread at a time, and the operating system
-    /// hands out a HID device exclusively anyway.
+    /// board is driven from one thread at a time. Neither macOS nor Linux
+    /// refuses a second open, see the README on concurrent use.
     dev: RefCell<DeviceReaderWriter>,
 
     /// Set when a read timed out. The answer may still arrive afterwards and
@@ -92,13 +98,13 @@ impl Board {
             };
 
             let Some((_, device)) = chosen else {
-                return Err(Error::NotFound {
+                return Err(detached(serial).unwrap_or(Error::NotFound {
                     serial: serial.map(str::to_owned),
-                });
+                }));
             };
 
             Ok(Board {
-                dev: RefCell::new(device.open().await?),
+                dev: RefCell::new(device.open().await.map_err(open_failed)?),
                 stale: Cell::new(false),
             })
         })
@@ -202,6 +208,147 @@ pub fn list() -> Result<Vec<String>> {
     })
 }
 
+/// What to tell a user whose operating system refused to open the board.
+#[cfg(target_os = "linux")]
+const PERMISSION_DENIED: &str = "Permission denied on the hidraw device of the \
+YKUSH3. Allow access with a udev rule, /etc/udev/rules.d/60-ykush3.rules as \
+shown in the README, make this user a member of the group the rule names, and \
+replug the board";
+#[cfg(not(target_os = "linux"))]
+const PERMISSION_DENIED: &str = "Permission denied on the YKUSH3";
+
+/// Turns a refused open into an error that says what to do about it.
+///
+/// On Linux the board is a file, `/dev/hidrawN`, owned by root until a udev
+/// rule says otherwise. The library reports that as a plain `EACCES`, which
+/// on its own does not lead anyone to the rule.
+fn open_failed(error: async_hid::HidError) -> Error {
+    let denied = match &error {
+        async_hid::HidError::Other(inner) => inner
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied),
+        _ => false,
+    };
+
+    if denied {
+        Error::Hid(PERMISSION_DENIED.to_owned())
+    } else {
+        error.into()
+    }
+}
+
+/// Explains a board that is on the bus but has no HID device to open.
+///
+/// Only Linux can get into this state: a libusb based program - `ykushcmd`
+/// is one - detaches the kernel's HID driver to talk to the board itself, and
+/// the hidraw node goes with it until the driver is bound again. The board is
+/// then listed by `lsusb` and still invisible here, which a plain "not found"
+/// would leave unexplained.
+fn detached(serial: Option<&str>) -> Option<Error> {
+    detached_message(&detached_on_this_host(serial)).map(Error::Device)
+}
+
+/// Why boards that `lsusb` shows are missing from the list, if any are.
+///
+/// Listing only reads the device list and fails for none of this, so the
+/// command line prints this beside an empty list rather than instead of it.
+/// Always `None` outside Linux, where the state cannot arise.
+pub fn detached_hint() -> Option<String> {
+    detached_message(&detached_on_this_host(None))
+}
+
+#[cfg(target_os = "linux")]
+fn detached_on_this_host(serial: Option<&str>) -> Vec<String> {
+    detached_interfaces(std::path::Path::new(SYSFS_USB_DEVICES), serial)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn detached_on_this_host(_serial: Option<&str>) -> Vec<String> {
+    Vec::new()
+}
+
+/// The explanation for HID interfaces without a driver, naming every one of
+/// them: with several boards detached, naming one would leave the others
+/// unexplained.
+fn detached_message(interfaces: &[String]) -> Option<String> {
+    let bind =
+        |name: &String| format!("echo -n {name} | sudo tee /sys/bus/usb/drivers/usbhid/bind");
+
+    match interfaces {
+        [] => None,
+        [one] => Some(format!(
+            "A YKUSH3 is on the USB bus, but no HID driver is bound to its interface \
+             {one}, so it has no hidraw device. A program that drives the board \
+             through libusb, such as ykushcmd, detaches the driver. Replug the board, \
+             or bind the driver again: {}",
+            bind(one)
+        )),
+        several => Some(format!(
+            "{} YKUSH3 boards are on the USB bus, but no HID driver is bound to their \
+             interfaces {}, so they have no hidraw device. A program that drives the \
+             board through libusb, such as ykushcmd, detaches the driver. Replug the \
+             boards, or bind the driver again: {}",
+            several.len(),
+            several.join(", "),
+            several.iter().map(bind).collect::<Vec<_>>().join("; ")
+        )),
+    }
+}
+
+/// Where Linux lists USB devices and their interfaces side by side.
+#[cfg(target_os = "linux")]
+const SYSFS_USB_DEVICES: &str = "/sys/bus/usb/devices";
+
+/// The HID interfaces of YKUSH3 boards that no driver is bound to, by their
+/// sysfs name (`1-1.4.4:1.0`), optionally only those of one serial number.
+///
+/// Takes the directory as a parameter so the tests can lay out a fake one.
+/// Anything unreadable counts as not matching: this only refines an error
+/// that is already being reported.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn detached_interfaces(usb_devices: &std::path::Path, serial: Option<&str>) -> Vec<String> {
+    let read = |path: std::path::PathBuf| {
+        std::fs::read_to_string(path)
+            .map(|s| s.trim().to_owned())
+            .unwrap_or_default()
+    };
+
+    let Ok(entries) = std::fs::read_dir(usb_devices) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    names.sort();
+
+    let boards: Vec<&String> = names
+        .iter()
+        .filter(|name| {
+            let dir = usb_devices.join(name);
+            u16::from_str_radix(&read(dir.join("idVendor")), 16) == Ok(VENDOR_ID)
+                && u16::from_str_radix(&read(dir.join("idProduct")), 16) == Ok(PRODUCT_ID)
+                && serial.is_none_or(|wanted| sanitize(&read(dir.join("serial"))) == wanted)
+        })
+        .collect();
+
+    names
+        .iter()
+        .filter(|name| {
+            boards.iter().any(|board| {
+                name.strip_prefix(board.as_str())
+                    .is_some_and(|rest| rest.starts_with(':'))
+            })
+        })
+        .filter(|name| {
+            let dir = usb_devices.join(name);
+            read(dir.join("bInterfaceClass")) == "03"
+                && std::fs::symlink_metadata(dir.join("driver")).is_err()
+        })
+        .cloned()
+        .collect()
+}
+
 /// Every attached board, as its sanitised serial number and the handle it was
 /// found under, in enumeration order.
 async fn attached_boards() -> Result<Vec<(String, Device)>> {
@@ -241,12 +388,154 @@ mod tests {
         assert!(r[6..].iter().all(|&b| b == 0));
     }
 
+    fn os_error(kind: std::io::ErrorKind) -> async_hid::HidError {
+        async_hid::HidError::from(std::io::Error::from(kind))
+    }
+
+    #[test]
+    fn a_refused_open_says_what_to_do_about_it() {
+        let error = open_failed(os_error(std::io::ErrorKind::PermissionDenied));
+
+        assert!(matches!(&error, Error::Hid(msg) if msg == PERMISSION_DENIED));
+        #[cfg(target_os = "linux")]
+        assert!(error
+            .to_string()
+            .contains("/etc/udev/rules.d/60-ykush3.rules"));
+    }
+
+    #[test]
+    fn any_other_open_failure_keeps_its_own_message() {
+        let error = open_failed(os_error(std::io::ErrorKind::NotFound));
+
+        assert!(matches!(&error, Error::Hid(msg) if msg != PERMISSION_DENIED));
+        let error = open_failed(async_hid::HidError::NotConnected);
+        assert!(matches!(&error, Error::Hid(msg) if msg != PERMISSION_DENIED));
+    }
+
+    /// A stand-in for `/sys/bus/usb/devices`, removed again when dropped.
+    struct FakeSysfs(std::path::PathBuf);
+
+    impl FakeSysfs {
+        fn new(name: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("ykush3-sysfs-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            FakeSysfs(dir)
+        }
+
+        fn file(&self, path: &str, content: &str) -> &Self {
+            let path = self.0.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, format!("{content}\n")).unwrap();
+            self
+        }
+
+        fn device(&self, name: &str, vid: &str, pid: &str, serial: &str) -> &Self {
+            self.file(&format!("{name}/idVendor"), vid)
+                .file(&format!("{name}/idProduct"), pid)
+                .file(&format!("{name}/serial"), serial)
+        }
+
+        fn interface(&self, name: &str, class: &str, bound: bool) -> &Self {
+            self.file(&format!("{name}/bInterfaceClass"), class);
+            if bound {
+                std::fs::create_dir_all(self.0.join(name).join("driver")).unwrap();
+            }
+            self
+        }
+    }
+
+    impl Drop for FakeSysfs {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_board_without_a_hid_driver_is_found_on_the_bus() {
+        let sysfs = FakeSysfs::new("detached");
+        sysfs
+            .device("1-1.4.4", "04d8", "f11b", "Y3N13808")
+            .interface("1-1.4.4:1.0", "03", false)
+            // Same vendor, other product, likewise without a driver.
+            .device("1-1.2", "04d8", "f11c", "OTHER")
+            .interface("1-1.2:1.0", "03", false)
+            // An ST-Link, whose name shares a prefix with nothing here.
+            .device("1-1.4.4.1", "0483", "374e", "005000213438510D34313939")
+            .interface("1-1.4.4.1:1.0", "03", false);
+
+        assert_eq!(detached_interfaces(&sysfs.0, None), ["1-1.4.4:1.0"]);
+        assert_eq!(
+            detached_interfaces(&sysfs.0, Some("Y3N13808")),
+            ["1-1.4.4:1.0"]
+        );
+        assert!(detached_interfaces(&sysfs.0, Some("Y3N00000")).is_empty());
+    }
+
+    #[test]
+    fn every_detached_board_is_named() {
+        let sysfs = FakeSysfs::new("two");
+        sysfs
+            .device("1-1.3", "04d8", "f11b", "Y3N00001")
+            .interface("1-1.3:1.0", "03", false)
+            .device("1-1.4.4", "04d8", "f11b", "Y3N13808")
+            .interface("1-1.4.4:1.0", "03", false);
+
+        let interfaces = detached_interfaces(&sysfs.0, None);
+        assert_eq!(interfaces, ["1-1.3:1.0", "1-1.4.4:1.0"]);
+        assert_eq!(
+            detached_interfaces(&sysfs.0, Some("Y3N00001")),
+            ["1-1.3:1.0"]
+        );
+
+        let message = detached_message(&interfaces).expect("a message");
+        assert!(message.starts_with("2 YKUSH3 boards"), "{message}");
+        for name in &interfaces {
+            assert!(
+                message.contains(&format!("echo -n {name} | sudo tee")),
+                "{message} lacks {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn one_detached_board_is_named_and_none_says_nothing() {
+        let message = detached_message(&["1-1.4.4:1.0".to_owned()]).expect("a message");
+
+        assert!(
+            message.starts_with("A YKUSH3 is on the USB bus"),
+            "{message}"
+        );
+        assert!(message.contains("echo -n 1-1.4.4:1.0 | sudo tee"));
+        assert_eq!(detached_message(&[]), None);
+    }
+
+    #[test]
+    fn a_board_with_its_hid_driver_bound_is_not_reported() {
+        let sysfs = FakeSysfs::new("bound");
+        sysfs
+            .device("1-1.4.4", "04d8", "f11b", "Y3N13808")
+            .interface("1-1.4.4:1.0", "03", true)
+            // A non-HID interface without a driver is none of this check's business.
+            .interface("1-1.4.4:1.1", "ff", false);
+
+        assert!(detached_interfaces(&sysfs.0, None).is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_device_directory_reports_nothing() {
+        let missing = std::env::temp_dir().join("ykush3-sysfs-does-not-exist");
+
+        assert!(detached_interfaces(&missing, None).is_empty());
+    }
+
     /// Everything below needs a YKUSH3 attached and is skipped by default.
     ///
     /// Run with `cargo test -- --ignored --test-threads=1`. The single thread is
-    /// not optional: the operating system hands out a HID device exclusively,
-    /// and opening or closing it from several threads at once takes the whole
-    /// process down.
+    /// not optional. Neither macOS nor Linux refuses a second open, and each
+    /// answer reaches every open handle, so tests running side by side would
+    /// read each other's answers.
     mod hardware {
         use super::*;
 

@@ -1,8 +1,8 @@
 # ykush3cmd
 
 An independent Rust implementation of the YKUSH3 control protocol, **for macOS on Apple
-silicon**. YKUSH3 only (VID `0x04D8`, PID `0xF11B`) - YKUSH, YKUSH2 and YKUSHXS are not
-covered.
+silicon and for Linux on 64 bit Arm**. YKUSH3 only (VID `0x04D8`, PID `0xF11B`) - YKUSH,
+YKUSH2 and YKUSHXS are not covered.
 
 It was written against Yepkit's published protocol documentation, not derived from the
 source of their C++ `ykushcmd`: the structure, the architecture and every line of code are
@@ -43,19 +43,61 @@ resolves the dependencies afresh instead of taking the versions pinned in `Cargo
 the ones the tests and the dependency audit actually ran against. The tag picks the
 release; leave it off to build the tip of `master`.
 
-**For macOS on Apple silicon.** That is where it was written, built and run, and the source
-refuses to compile anywhere else rather than produce a binary nobody has tried.
+**For macOS on Apple silicon and for Linux on aarch64.** Those are the two systems it has
+been built on and run against a board - Linux on a Raspberry Pi 4 under Debian 13 - and the
+source refuses to compile anywhere else rather than produce a binary nobody has tried. Linux
+on x86_64 is left out for that reason alone: nothing in the code depends on the processor,
+but no board has been driven from such a machine yet.
 
-The HID access goes through the `async-hid` crate, which reaches IOKit from Rust. No C is
-compiled and no library travels alongside the binary, so a Rust toolchain is the whole
-requirement - no C compiler, no Xcode command line tools.
+The HID access goes through the `async-hid` crate, which reaches IOKit on macOS and the
+kernel's hidraw interface on Linux, both from Rust. No C is compiled and no library travels
+alongside the binary, so a Rust toolchain is the whole requirement - no C compiler, no Xcode
+command line tools, and on Linux neither `libudev` nor `pkg-config`: the devices are found
+by reading `/sys`.
 
-Reaching the device needs no special permission - the system hands it to any process that
-asks. See [SECURITY-REVIEW-0.4.0.md](SECURITY-REVIEW-0.4.0.md) for what that means, and
+On macOS, reaching the device needs no special permission - the system hands it to any
+process that asks. On Linux it takes a udev rule, see below. See
+[SECURITY-REVIEW-0.4.0.md](SECURITY-REVIEW-0.4.0.md) for what that means, and
 [SECURITY-REVIEW.md](SECURITY-REVIEW.md) for the earlier review of the `hidapi` transport.
 
-Every push builds and tests on macOS, see
+Every push builds and tests on macOS and on Linux (arm64), see
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+### Linux
+
+The board is a file, `/dev/hidrawN`, which belongs to root until a udev rule hands it to a
+group. This rule gives it to `plugdev`, for the hidraw node as well as for the USB device:
+
+```
+# /etc/udev/rules.d/60-ykush3.rules
+SUBSYSTEM=="usb", ATTR{idVendor}=="04d8", ATTR{idProduct}=="f11b", MODE="0660", GROUP="plugdev"
+KERNEL=="hidraw*", ATTRS{idVendor}=="04d8", ATTRS{idProduct}=="f11b", MODE="0660", GROUP="plugdev"
+```
+
+Then load it, make the user a member of the group, and replug the board:
+
+```
+sudo udevadm control --reload-rules
+sudo usermod -aG plugdev "$USER"      # takes effect at the next login
+```
+
+Without the rule, every command that opens the board fails and names the rule file. `-l`
+works without it, since listing reads `/sys` and opens nothing.
+
+Two things work differently from macOS:
+
+- **The kernel's HID driver has to be bound to the board.** A program that drives the
+  YKUSH3 through libusb - Yepkit's `ykushcmd`, the Debian package `ykush-control` among
+  them - detaches that driver and does not bind it again, and the hidraw node disappears with
+  it. `lsusb` still lists the board, this program can no longer reach it, and says so,
+  naming the interface; `-l` still prints its list and exits 0, with the hint on stderr.
+  Replugging the board brings the driver back, and so does binding it by hand, for
+  example `echo -n 1-1.4.4:1.0 | sudo tee /sys/bus/usb/drivers/usbhid/bind` with the
+  interface name from the message.
+- **The board is not opened exclusively.** Linux lets several programs open the hidraw node
+  at once and delivers every answer to all of them. Two invocations running at the same time
+  can then read each other's answers, so a script has to run them one after the other. macOS
+  behaves the same way, see the limits below.
 
 ## Using it
 
@@ -324,30 +366,30 @@ command line application.
 ## Tests
 
 ```
-cargo test                                    # 99 tests and a doctest, no
+cargo test                                    # 116 tests and a doctest, no
                                               # hardware needed
 cargo test -- --ignored --test-threads=1      # 9 more: 7 need a board, 2 only
                                               # the HID stack of the system
 ```
 
-Every push runs the first line on macOS, along with `cargo fmt --check`, `cargo clippy`
+Every push runs the first line on macOS and on Linux, along with `cargo fmt --check`, `cargo clippy`
 with warnings denied, and a build against the `rust-version` from `Cargo.toml` so that
 figure stays honest.
 
-The second run **must** be single threaded. The operating system hands out a HID device
-exclusively, and opening or closing it from several threads at once takes the whole process
-down with it - SIGTRAP on macOS.
+The second run **must** be single threaded. Neither macOS nor Linux refuses a second open of
+the board, and each answer reaches every open handle, so tests running side by side would
+read each other's answers.
 
 | Group | Tests | Subject |
 |---|---|---|
 | `cli` | 30 | grammar, board selection, every command, every error message |
 | `ykush3` | 39 | the bytes each command sends, reading answers, error paths, a swept and a hand-picked pass over generated answers |
-| `main` | 13 | output format, dispatch of every command, program name |
-| `error`, `help`, `device`, `sanitize` | 10 | error texts, help output, report padding, the character filter |
+| `main` | 15 | output format, dispatch of every command, program name |
+| `error`, `help`, `device`, `sanitize` | 17 | error texts, help output, report padding, the Linux permission and driver diagnostics, the character filter |
 | `tests/cli.rs` | 9 | the built binary: exit codes, stdout versus stderr |
 | `tests/encoding.rs` | 6 | every file is valid UTF-8 within Latin-1, and the rule itself |
 | doctest | 1 | the library example compiles; `no_run`, since it needs a board |
-| **running without hardware** | **107 + 1** | |
+| **running without hardware** | **116 + 1** | |
 | `--ignored`, needs a board | 7 | opening and real exchanges, the acknowledged switch, the echoed pin and port |
 | `--ignored`, needs only the HID stack | 2 | enumeration when nothing is attached |
 
@@ -430,6 +472,21 @@ the stricter checks require.
 Not exercised: `--boot`. The board would stay in its bootloader and only the firmware update
 tool would get it back.
 
+### On Linux
+
+The same board on 2026-10-11, from a Raspberry Pi 4 under Debian 13 (kernel 6.18, aarch64),
+with an ST-Link debug probe on each of the three downstream ports and the udev rule from
+[Linux](#linux) in place. The switching and the comparison with `ykushcmd` ran on commit
+`ca13204`, both test suites again on `3b889a6`:
+
+| Area | What was run | Result |
+|---|---|---|
+| Test suite | `cargo test` and `cargo test -- --ignored --test-threads=1` | 116 + 1 and 9 hardware tests pass |
+| Enumeration | `-l`, `-s <serial>`, an unknown serial | correct, serial read from `HID_UNIQ`, unknown serial exits 1 |
+| Port state | `-g 1` through `-g 3`, compared with `ykushcmd ykush3 -g` | the same states |
+| Port switching | `-d`, then `-u`, on each port in turn, checked with `lsusb` | the probe on that port, and only that one, left the bus and came back within about a second |
+| Detached driver | `ykushcmd` run first, then this program | reported with the interface name; binding `usbhid` again restores access |
+
 What turned up beyond what the documentation says:
 
 - **The undocumented configuration values work.** `-c e 1` sets the 5V output to come up by
@@ -453,8 +510,10 @@ What turned up beyond what the documentation says:
 - **A bus scan across all 7 bit addresses** (`0x08`-`0x77`) ran through without a single
   answer with nothing on the I2C header, so the method is sound for finding a device once
   one is there.
-- **The board can only be open once.** A second attempt fails with "exclusive access and
-  device already open", so concurrent invocations of `ykush3cmd` have to take turns.
+- **A second open is not refused.** Since the transport moved to `async-hid`, macOS lets a
+  second invocation open the board while the first one holds it, and every answer reaches
+  both, so concurrent invocations of `ykush3cmd` have to take turns. Linux behaves the same,
+  see [Linux](#linux).
 - **The connector is the most common fault.** When the USB 3.0 micro-B plug is not seated
   fully, only the SuperSpeed hub appears; the USB 2.0 hub and the controller are missing and
   the board cannot be reached even though the power LED is lit. Check the plug before

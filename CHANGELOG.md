@@ -6,6 +6,32 @@ Notable changes, newest first. The format follows
 
 ## Unreleased
 
+Linux on 64 bit Arm joins macOS on Apple silicon as a supported system, built
+and run against a board on a Raspberry Pi 4 under Debian 13. The protocol and
+the report exchange are the same on both; what differs is how the device is
+reached and who may open it.
+
+### Added
+
+- Linux on aarch64 is a supported target. The transport needs no change: the
+  pinned `async-hid` revision drives the board through hidraw, finds it by
+  reading `/sys`, and needs neither `libudev` nor `pkg-config` to build. The
+  macOS write path of that revision is untouched. Linux on x86_64 still
+  refuses to compile, because no board has been driven from it.
+- A refused open on Linux names the udev rule that grants access,
+  `/etc/udev/rules.d/60-ykush3.rules`, instead of a bare "Permission denied".
+  The README has the rule.
+- A board that is on the USB bus but has no HID driver bound - the state a
+  libusb based program such as `ykushcmd` leaves it in - is reported as such,
+  with the interface names of every such board and how to bind the driver
+  again, instead of as a board that is not attached. A command that opens a
+  board fails with that message. `-l` keeps its contract: it prints the empty
+  list and exits 0, and the hint goes to stderr.
+- `ykush3::detached_hint()` in the library: the explanation for YKUSH3 boards
+  on the bus whose HID driver is detached, or `None`. Always `None` outside
+  Linux.
+- CI builds, lints and tests on Linux (arm64) as well as on macOS.
+
 ### Changed
 
 - The release profile turns on link time optimisation and a single codegen
@@ -16,8 +42,6 @@ Notable changes, newest first. The format follows
 - The transport follows its revision on the fork, which moved when
   sidit77/async-hid#50 was merged and the branch was rebased onto it. The tree
   at the new revision is byte for byte the tree at the old one.
-
-### Added
 
 - `tests/encoding.rs` holds every file in the repository to valid UTF-8 within
   Latin-1: no character above U+00FF, and none of the Latin-1 characters that

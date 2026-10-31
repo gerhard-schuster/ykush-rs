@@ -52,7 +52,12 @@ fn run(program: &str, args: &[String], out: &mut impl Write) -> Result<()> {
         // Commands that do not address a single board.
         Command::Help => help::print_all(out, program),
         Command::Version => help::print_version(out),
-        Command::List => print_boards(out, &ykush3::list()?),
+        Command::List => list_boards(
+            out,
+            &mut io::stderr(),
+            &ykush3::list()?,
+            ykush3::detached_hint,
+        ),
 
         command => {
             let board = Ykush3::open(invocation.serial.as_deref())?;
@@ -96,6 +101,25 @@ fn execute<T: Transport>(board: &Ykush3<T>, command: &Command, out: &mut impl Wr
         }
     }
 
+    Ok(())
+}
+
+/// Prints the boards found. With none found, a board on the bus that cannot
+/// be reached is explained on stderr; the listing itself still succeeds, as an
+/// empty one always has. The hint is fetched only then, which costs a scan of
+/// sysfs that a non-empty list does not need.
+fn list_boards(
+    out: &mut impl Write,
+    err: &mut impl Write,
+    serials: &[String],
+    hint: impl FnOnce() -> Option<String>,
+) -> Result<()> {
+    print_boards(out, serials)?;
+    if serials.is_empty() {
+        if let Some(hint) = hint() {
+            writeln!(err, "{hint}")?;
+        }
+    }
     Ok(())
 }
 
@@ -219,6 +243,35 @@ mod tests {
         print_boards(&mut out, &[]).unwrap();
 
         assert!(String::from_utf8(out).unwrap().contains("none"));
+    }
+
+    #[test]
+    fn a_detached_board_is_explained_on_stderr_and_the_listing_succeeds() {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+
+        list_boards(&mut out, &mut err, &[], || {
+            Some("no driver on 1-1.4.4:1.0".into())
+        })
+        .expect("an empty listing is still a listing");
+
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("YKUSH3 boards on this host:") && text.contains("none"));
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            "no driver on 1-1.4.4:1.0\n"
+        );
+    }
+
+    #[test]
+    fn a_non_empty_listing_does_not_look_for_detached_boards() {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+
+        list_boards(&mut out, &mut err, &["YK00001".to_owned()], || {
+            panic!("the hint is only needed for an empty list")
+        })
+        .unwrap();
+
+        assert!(err.is_empty());
     }
 
     #[test]
