@@ -248,7 +248,7 @@ pub fn list() -> Result<Vec<String>> {
 /// What to tell a user whose operating system refused to open the board.
 #[cfg(target_os = "linux")]
 pub(crate) const PERMISSION_DENIED: &str = "Permission denied on the hidraw device of the \
-YKUSH3. Allow access with a udev rule, /etc/udev/rules.d/60-ykush3.rules as \
+YKUSH3. Allow access with a udev rule, /etc/udev/rules.d/60-ykush.rules as \
 shown in the README, make this user a member of the group the rule names, and \
 replug the board";
 #[cfg(not(target_os = "linux"))]
@@ -507,7 +507,7 @@ mod tests {
         #[cfg(target_os = "linux")]
         assert!(error
             .to_string()
-            .contains("/etc/udev/rules.d/60-ykush3.rules"));
+            .contains("/etc/udev/rules.d/60-ykush.rules"));
     }
 
     #[test]

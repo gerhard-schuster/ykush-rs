@@ -25,7 +25,7 @@
 //!   expected to make macOS refuse a second open (not yet measured).
 //!
 //! The lock is advisory. It orders the programs that ask for it - every
-//! instance of `ykush3cmd`, and any program built on this library - among
+//! instance of `ykushctrl`, and any program built on this library - among
 //! themselves. A tool that opens the node without asking is not held back.
 
 use std::time::{Duration, Instant};
@@ -159,7 +159,7 @@ mod linux {
     use crate::error::{Error, Result};
 
     /// What the user is told when another instance holds the board.
-    pub(crate) const HELD: &str = "another ykush3cmd is using it";
+    pub(crate) const HELD: &str = "another ykushctrl is using it";
 
     /// An exclusive `flock` on the hidraw node of a board, held until dropped.
     ///

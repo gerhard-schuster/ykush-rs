@@ -3,14 +3,14 @@
 //!
 //! An independent implementation of the YKUSH3 control protocol, written
 //! against Yepkit's published documentation rather than derived from their
-//! `ykushcmd`. The `ykush3cmd` binary in this package is a command line front
+//! `ykushcmd`. The `ykushctrl` binary in this package is a command line front
 //! end to this library; a Rust program can skip it and drive the board
 //! directly:
 //!
 //! ```no_run
-//! use ykush3::{Port, Ykush3};
+//! use ykush::{Port, Ykush3};
 //!
-//! # fn main() -> ykush3::Result<()> {
+//! # fn main() -> ykush::Result<()> {
 //! let board = Ykush3::open(None)?;
 //! board.port_down(Port::Downstream(2))?;
 //! println!("{}", board.port_status(Port::Downstream(2))?);
@@ -30,7 +30,7 @@
 // out only because no board has been driven from it, and taking it in is this
 // line plus a hardware run.
 #[cfg(not(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux"))))]
-compile_error!("ykush3 is for macOS on Apple silicon and for Linux on aarch64");
+compile_error!("ykush is for macOS on Apple silicon and for Linux on aarch64");
 
 mod device;
 mod error;

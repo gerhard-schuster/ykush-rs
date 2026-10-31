@@ -1,4 +1,4 @@
-# ykush3cmd
+# ykush-rs
 
 An independent Rust implementation of the YKUSH3 control protocol, **for macOS on Apple
 silicon and for Linux on 64 bit Arm**. YKUSH3 only (VID `0x04D8`, PID `0xF11B`) - YKUSH,
@@ -29,19 +29,19 @@ new work. That program serves here as a reference to compare against, and the
 cargo build --release
 ```
 
-The result is a single binary, `target/release/ykush3cmd`.
+The result is a single binary, `target/release/ykushctrl`.
 
 With a Rust toolchain (1.86 or newer) installed, building and installing is one step,
 no clone needed:
 
 ```
-cargo install --locked --tag v0.4.1 --git https://github.com/gerhard-schuster/ykush3cmd
+cargo install --locked --git https://github.com/gerhard-schuster/ykush-rs
 ```
 
-This puts `ykush3cmd` into `~/.cargo/bin`. The `--locked` matters: without it, cargo
+This puts `ykushctrl` into `~/.cargo/bin`. The `--locked` matters: without it, cargo
 resolves the dependencies afresh instead of taking the versions pinned in `Cargo.lock` -
-the ones the tests and the dependency audit actually ran against. The tag picks the
-release; leave it off to build the tip of `master`.
+the ones the tests and the dependency audit actually ran against. `--tag` picks a release;
+up to v0.4.1 the program was called `ykush3cmd` and the repository `ykush3cmd`.
 
 **For macOS on Apple silicon and for Linux on aarch64.** Those are the two systems it has
 been built on and run against a board - Linux on a Raspberry Pi 4 under Debian 13 - and the
@@ -66,10 +66,10 @@ Every push builds and tests on macOS and on Linux (arm64), see
 ### Linux
 
 The board is a file, `/dev/hidrawN`, which belongs to root until a udev rule hands it to a
-group. ykush3cmd reaches the board only through that node; this rule gives it to `plugdev`:
+group. ykushctrl reaches the board only through that node; this rule gives it to `plugdev`:
 
 ```
-# /etc/udev/rules.d/60-ykush3.rules
+# /etc/udev/rules.d/60-ykush.rules
 KERNEL=="hidraw*", ATTRS{idVendor}=="04d8", ATTRS{idProduct}=="f11b", MODE="0660", GROUP="plugdev"
 ```
 
@@ -97,12 +97,12 @@ Three things to know on Linux, the last one applies on macOS as well:
   at once and delivers every answer to all of them (the kernel copies each report into the
   buffer of every open file, `hidraw_report_event` in `drivers/hid/hidraw.c`), so two
   programs talking to the board at the same time can read each other's answers.
-  Invocations of `ykush3cmd` take turns: each one takes an advisory `flock` on the board's
+  Invocations of `ykushctrl` take turns: each one takes an advisory `flock` on the board's
   `/dev/hidrawN` before it opens the board, and the next one waits for it, see
   [Concurrent invocations](#concurrent-invocations). No lock file is involved; the kernel
   drops the lock when the process ends, crash included.
 - **Other tools are not covered by that lock.** Yepkit's `ykushcmd`, or any other HID tool,
-  run against the same board while `ykush3cmd` is running is not held back. A build of such a
+  run against the same board while `ykushctrl` is running is not held back. A build of such a
   tool that goes through hidraw opens the node beside this program, and answers can reach
   the wrong process. A build that goes through libusb detaches the kernel's HID driver,
   and the board disappears from under this program, see the point above. **Use one YKUSH3
@@ -116,8 +116,8 @@ stray first word, a second `-s` - is an error here; the
 [differences table](#where-it-differs-from-the-c-original) has the full list:
 
 ```
-ykush3cmd -u 1
-ykush3cmd ykush3 -u 1        # the same thing
+ykushctrl -u 1
+ykushctrl ykush3 -u 1        # the same thing
 ```
 
 The **messages** deliberately are not compatible - they are worded independently, see
@@ -151,15 +151,15 @@ Exit status: `0` on success, `1` on failure - board not found, board busy, inval
 or the board rejecting the command.
 
 ```
-$ ykush3cmd -l
+$ ykushctrl -l
 YKUSH3 boards on this host:
    1  Y3N13808
 
-$ ykush3cmd -s Y3N13808 -d 2      # cut power to port 2
-$ ykush3cmd -g 2
+$ ykushctrl -s Y3N13808 -d 2      # cut power to port 2
+$ ykushctrl -g 2
 Port 2: off
-$ ykush3cmd -c 2 1                # port 2 comes up on the next reset
-$ ykush3cmd --firmware-version
+$ ykushctrl -c 2 1                # port 2 comes up on the next reset
+$ ykushctrl --firmware-version
 Firmware 1.5.0
 ```
 
@@ -169,10 +169,10 @@ Two invocations addressing the same board at the same time take turns: the secon
 until the first is done, **up to 5 seconds**, and then gives up with exit status `1`:
 
 ```
-$ ykush3cmd -g 1
-The YKUSH3 Y3N13808 is still not available after 5.0 s: another ykush3cmd is using it
-$ ykush3cmd --no-wait -g 1
-The YKUSH3 Y3N13808 is not available: another ykush3cmd is using it
+$ ykushctrl -g 1
+The YKUSH3 Y3N13808 is still not available after 5.0 s: another ykushctrl is using it
+$ ykushctrl --no-wait -g 1
+The YKUSH3 Y3N13808 is not available: another ykushctrl is using it
 ```
 
 One invocation holds the board for a few milliseconds, so five seconds lets dozens of them
@@ -346,7 +346,7 @@ v1.2.1 or in the online reference, yet both work - see
 ## How it is put together
 
 The package builds two targets: the `ykush3` **library**, which holds everything that
-touches the board, and the `ykush3cmd` **binary**, a command line front end on top of it.
+touches the board, and the `ykushctrl` **binary**, a command line front end on top of it.
 
 | File | Target | Contents |
 |---|---|---|
@@ -377,7 +377,7 @@ real HID device. `execute()` writes into an `impl Write`, so the output can be c
 A Rust program can depend on the library and skip the command line entirely:
 
 ```rust
-use ykush3::{Port, Ykush3};
+use ykush::{Port, Ykush3};
 
 let board = Ykush3::open(None)?;            // or Some("Y3N13808")
 board.port_down(Port::Downstream(2))?;
@@ -400,7 +400,7 @@ both of them, where neither can reach it.
 `Ykush3::open` and `Board::open` wait up to `DEFAULT_WAIT`, five seconds, for a board
 another process is using, and fail with `Error::Busy` after that; `open_within` takes the
 limit, and a limit of zero fails at once. On Linux a held `Board` keeps its lock for as long
-as it lives, so a long running program makes every `ykush3cmd` invocation on that board
+as it lives, so a long running program makes every `ykushctrl` invocation on that board
 wait - or fail, if it holds on for longer than they wait.
 
 `FakeBoard` ships with the library, so code built on it can be tested the same way this
@@ -410,11 +410,11 @@ build that does not ask for the double gets a library without test gear:
 
 ```toml
 [dev-dependencies]
-ykush3cmd = { path = "../ykush3-rs", features = ["fake"] }
+ykushctrl = { path = "../ykush-rs", features = ["fake"] }
 ```
 
 ```rust
-use ykush3::{fake::FakeBoard, Port, Ykush3};
+use ykush::{fake::FakeBoard, Port, Ykush3};
 
 let board = Ykush3::with_transport(FakeBoard::answering(&[0x01]));
 board.port_up(Port::Downstream(1))?;
@@ -500,7 +500,7 @@ export RUSTFLAGS="-C instrument-coverage" LLVM_PROFILE_FILE="/tmp/yk/%p-%m.profr
 cargo test && cargo test --no-fail-fast -- --ignored --test-threads=1
 llvm-profdata merge -sparse /tmp/yk/*.profraw -o /tmp/yk/yk.profdata
 llvm-cov report -object target/debug/deps/<every test binary> \
-                -object target/debug/ykush3cmd \
+                -object target/debug/ykushctrl \
                 -instr-profile=/tmp/yk/yk.profdata \
                 -ignore-filename-regex='(\.cargo/|\.rustup/|/rustc/|/tests/)'
 ```
@@ -659,11 +659,11 @@ YKUSH3's own factory address `0x53`, and it is the master here anyway.
 Which gives:
 
 ```
-ykush3cmd --i2c-master enable       # once, and it survives a reset
-ykush3cmd --i2c-write 0xA2 0x01     # on-board relay on
-ykush3cmd --i2c-write 0xA2 0x02     # on-board relay off
-ykush3cmd --i2c-write 0xA2 0x03     # external relay 1 on
-ykush3cmd --i2c-write 0xA2 0x0E     # everything off
+ykushctrl --i2c-master enable       # once, and it survives a reset
+ykushctrl --i2c-write 0xA2 0x01     # on-board relay on
+ykushctrl --i2c-write 0xA2 0x02     # on-board relay off
+ykushctrl --i2c-write 0xA2 0x03     # external relay 1 on
+ykushctrl --i2c-write 0xA2 0x0E     # everything off
 ```
 
 Worth knowing before wiring it up:
@@ -676,7 +676,7 @@ Worth knowing before wiring it up:
 - **Tie the grounds together.** I2C needs a common reference.
 - **The YKUR needs its own supply.** Two I2C wires do not feed it. The obvious arrangement
   is to run the YKUSH3's switched 5V output, good for 6 A, into the YKUR's external supply
-  input - which also lets `ykush3cmd -on`/`-off` cut the YKUR's power entirely.
+  input - which also lets `ykushctrl -on`/`-off` cut the YKUR's power entirely.
 - **The exit code tells you nothing.** Verified on hardware: on an empty bus `--i2c-write`
   reports success and `--i2c-read` returns `255`. Whether the YKUR answers at all shows only
   in the content of a reply that cannot be `255` - or simply in whether the relay clicks.

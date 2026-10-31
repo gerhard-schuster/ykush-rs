@@ -8,7 +8,7 @@
 use std::process::{Command, Output};
 
 fn run(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_ykush3cmd"))
+    Command::new(env!("CARGO_BIN_EXE_ykushctrl"))
         .args(args)
         .output()
         .expect("the binary should run")
@@ -27,7 +27,7 @@ fn without_arguments_the_help_goes_to_stdout_and_succeeds() {
     let output = run(&[]);
 
     assert!(output.status.success());
-    assert!(stdout(&output).contains("ykush3cmd "));
+    assert!(stdout(&output).contains("ykushctrl "));
     assert!(stdout(&output).contains("--i2c-read"));
     assert!(stderr(&output).is_empty());
 }
@@ -50,7 +50,7 @@ fn the_version_option_prints_only_the_version() {
     let output = run(&["-v"]);
 
     assert!(output.status.success());
-    assert!(stdout(&output).starts_with("ykush3cmd "));
+    assert!(stdout(&output).starts_with("ykushctrl "));
     assert_eq!(stdout(&output).lines().count(), 1);
 }
 
@@ -89,7 +89,7 @@ fn an_argument_that_is_not_unicode_is_a_usage_error_not_a_crash() {
 
     // A byte sequence no String can hold. `env::args()` would panic on it;
     // the lossy conversion turns it into an ordinary unknown option.
-    let output = Command::new(env!("CARGO_BIN_EXE_ykush3cmd"))
+    let output = Command::new(env!("CARGO_BIN_EXE_ykushctrl"))
         .arg(OsStr::from_bytes(b"-\xff"))
         .output()
         .expect("the binary should run");
@@ -139,7 +139,7 @@ fn no_wait_with_a_value_is_a_usage_error() {
 /// the board before it gets to the lock. Read-only, like everything here.
 ///
 /// The holder is util-linux `flock`, a real second process on the same
-/// hidraw node, which the kernel treats exactly like another `ykush3cmd`.
+/// hidraw node, which the kernel treats exactly like another `ykushctrl`.
 #[cfg(target_os = "linux")]
 mod held_by_another_process {
     use super::*;
@@ -205,7 +205,7 @@ mod held_by_another_process {
 
         assert_eq!(output.status.code(), Some(1));
         assert!(
-            stderr(&output).contains("is not available: another ykush3cmd is using it"),
+            stderr(&output).contains("is not available: another ykushctrl is using it"),
             "{}",
             stderr(&output)
         );

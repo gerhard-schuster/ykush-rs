@@ -1,5 +1,5 @@
 [package]
-name = "ykush3cmd"
+name = "ykushctrl"
 version = "0.4.1"
 edition = "2021"
 rust-version = "1.86"
@@ -9,10 +9,10 @@ readme = "README.md"
 keywords = ["usb", "hub", "hid", "ykush", "yepkit"]
 categories = ["command-line-utilities", "hardware-support"]
 
-# The library is the product; the ykush3cmd binary is a front end to it. Its
+# The library is the product; the ykushctrl binary is a front end to it. Its
 # name drops the "cmd", which would be wrong in a use path.
 [lib]
-name = "ykush3"
+name = "ykush"
 
 [features]
 # The FakeBoard test double, so code built on the library can be tested
@@ -41,7 +41,7 @@ rustix = { version = "1", features = ["fs"] }
 # This package's own tests - the binary's included - use FakeBoard, which
 # sits behind the feature. A dev-dependency of the package on itself is how
 # the feature gets turned on for the tests and for nothing else.
-ykush3cmd = { path = ".", features = ["fake"] }
+ykushctrl = { path = ".", features = ["fake"] }
 
 [profile.release]
 opt-level = "s"

@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use cli::Command;
-use ykush3::{Error, Result, Transport, Ykush3};
+use ykush::{Error, Result, Transport, Ykush3};
 
 fn main() -> ExitCode {
     // Not `env::args()`: that panics on an argument that is not valid Unicode,
@@ -23,7 +23,7 @@ fn main() -> ExitCode {
     // the device serial numbers go through. An empty argv, which `execve`
     // permits, must not panic either.
     let args: Vec<String> = std::env::args_os()
-        .map(|arg| ykush3::sanitize(&arg.to_string_lossy()))
+        .map(|arg| ykush::sanitize(&arg.to_string_lossy()))
         .collect();
     let program = program_name(&args);
     let mut out = io::stdout().lock();
@@ -56,15 +56,15 @@ fn run(program: &str, args: &[String], out: &mut impl Write) -> Result<()> {
         Command::List => list_boards(
             out,
             &mut io::stderr(),
-            &ykush3::list()?,
-            ykush3::detached_hint,
+            &ykush::list()?,
+            ykush::detached_hint,
         ),
 
         command => {
             let wait = if invocation.no_wait {
                 Duration::ZERO
             } else {
-                ykush3::DEFAULT_WAIT
+                ykush::DEFAULT_WAIT
             };
             let board = Ykush3::open_within(invocation.serial.as_deref(), wait)?;
             execute(&board, command, out)
@@ -156,8 +156,8 @@ fn program_name(args: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ykush3::fake::FakeBoard;
-    use ykush3::Port;
+    use ykush::fake::FakeBoard;
+    use ykush::Port;
 
     /// Runs a command against a board answering with `answer` and returns what
     /// was printed.
@@ -294,15 +294,15 @@ mod tests {
     #[test]
     fn the_program_name_is_taken_from_the_invocation_path() {
         assert_eq!(
-            program_name(&["/usr/bin/ykush3cmd".to_owned()]),
-            "ykush3cmd"
+            program_name(&["/usr/bin/ykushctrl".to_owned()]),
+            "ykushctrl"
         );
-        assert_eq!(program_name(&[]), "ykush3cmd");
+        assert_eq!(program_name(&[]), "ykushctrl");
     }
 
     #[test]
     fn every_command_that_addresses_the_board_is_dispatched() {
-        use ykush3::PowerOnState;
+        use ykush::PowerOnState;
 
         let answered: Vec<(Vec<u8>, Command)> = vec![
             (vec![0x01], Command::PortUp(Port::All)),
@@ -344,11 +344,11 @@ mod tests {
     fn the_version_is_printed_without_addressing_a_board() {
         let mut out = Vec::new();
 
-        run("ykush3cmd", &["-v".to_owned()], &mut out).unwrap();
+        run("ykushctrl", &["-v".to_owned()], &mut out).unwrap();
 
         assert_eq!(
             String::from_utf8(out).unwrap(),
-            format!("ykush3cmd {}\n", help::VERSION)
+            format!("ykushctrl {}\n", help::VERSION)
         );
     }
 
@@ -358,7 +358,7 @@ mod tests {
     fn listing_boards_reaches_the_hid_stack() {
         let mut out = Vec::new();
 
-        run("ykush3cmd", &["-l".to_owned()], &mut out).expect("listing should work");
+        run("ykushctrl", &["-l".to_owned()], &mut out).expect("listing should work");
 
         assert!(String::from_utf8(out)
             .unwrap()
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn an_unparsable_command_line_never_reaches_a_board() {
         let result = run(
-            "ykush3cmd",
+            "ykushctrl",
             &["-u".to_owned(), "9".to_owned()],
             &mut Vec::new(),
         );
@@ -383,7 +383,7 @@ mod tests {
     fn a_read_only_command_reaches_a_real_board() {
         let mut out = Vec::new();
 
-        run("ykush3cmd", &["--firmware-version".to_owned()], &mut out).unwrap();
+        run("ykushctrl", &["--firmware-version".to_owned()], &mut out).unwrap();
 
         let text = String::from_utf8(out).unwrap();
         assert!(text.starts_with("Firmware "), "{text:?}");

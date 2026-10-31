@@ -11,6 +11,13 @@ and run against a board on a Raspberry Pi 4 under Debian 13. The protocol and
 the report exchange are the same on both; what differs is how the device is
 reached and who may open it.
 
+### Changed
+
+- Renamed: the program is `ykushctrl`, the package `ykushctrl`, the library
+  `ykush` (was `ykush3cmd` and `ykush3`), and the repository `ykush-rs`. The
+  board it supports is still the YKUSH3 only. The udev rule file is
+  `60-ykush.rules`.
+
 ### Added
 
 - Linux on aarch64 is a supported target. The transport needs no change: the
@@ -19,7 +26,7 @@ reached and who may open it.
   macOS write path of that revision is untouched. Linux on x86_64 still
   refuses to compile, because no board has been driven from it.
 - A refused open on Linux names the udev rule that grants access,
-  `/etc/udev/rules.d/60-ykush3.rules`, instead of a bare "Permission denied".
+  `/etc/udev/rules.d/60-ykush.rules`, instead of a bare "Permission denied".
   The README has the rule.
 - A board that is on the USB bus but has no HID driver bound - the state a
   libusb based program such as `ykushcmd` leaves it in - is reported as such,
@@ -27,7 +34,7 @@ reached and who may open it.
   again, instead of as a board that is not attached. A command that opens a
   board fails with that message. `-l` keeps its contract: it prints the empty
   list and exits 0, and the hint goes to stderr.
-- `ykush3::detached_hint()` in the library: the explanation for YKUSH3 boards
+- `ykush::detached_hint()` in the library: the explanation for YKUSH3 boards
   on the bus whose HID driver is detached, or `None`. Always `None` outside
   Linux.
 - CI builds, lints and tests on Linux (arm64) as well as on macOS.
@@ -52,7 +59,7 @@ reached and who may open it.
 - `Board::open_within()` and `Ykush3::open_within()` take the time to wait,
   `DEFAULT_WAIT` is the five seconds `open()` waits, and `Error::Busy` is
   what both return when the time is up.
-- The lock serializes `ykush3cmd` instances only. Another tool on the same
+- The lock serializes `ykushctrl` instances only. Another tool on the same
   board, Yepkit's `ykushcmd` among them, is not held back; README and
   `SECURITY.md` say so and recommend one YKUSH3 tool per host.
 - A hardware test that reads port states 2000 times over one held handle,

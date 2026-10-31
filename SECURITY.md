@@ -39,9 +39,9 @@ program:
 
 ## Concurrent use
 
-Invocations of `ykush3cmd` take turns at a board through an advisory
+Invocations of `ykushctrl` take turns at a board through an advisory
 `flock` on its `/dev/hidrawN`. Advisory means it only orders the programs
-that ask for it: the instances of `ykush3cmd` and programs built on its
+that ask for it: the instances of `ykushctrl` and programs built on its
 library. It is not access control and does not try to be one.
 
 Nothing protects a run of Yepkit's `ykushcmd`, or of any other HID tool,

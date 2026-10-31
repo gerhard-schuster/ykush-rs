@@ -119,17 +119,17 @@ mod tests {
                 Error::Busy {
                     serial: "Y3N13808".into(),
                     waited: std::time::Duration::from_secs(5),
-                    cause: "another ykush3cmd is using it".into(),
+                    cause: "another ykushctrl is using it".into(),
                 },
-                "The YKUSH3 Y3N13808 is still not available after 5.0 s: another ykush3cmd is using it",
+                "The YKUSH3 Y3N13808 is still not available after 5.0 s: another ykushctrl is using it",
             ),
             (
                 Error::Busy {
                     serial: "Y3N13808".into(),
                     waited: std::time::Duration::ZERO,
-                    cause: "another ykush3cmd is using it".into(),
+                    cause: "another ykushctrl is using it".into(),
                 },
-                "The YKUSH3 Y3N13808 is not available: another ykush3cmd is using it",
+                "The YKUSH3 Y3N13808 is not available: another ykushctrl is using it",
             ),
             (
                 Error::Device("the board said no".into()),

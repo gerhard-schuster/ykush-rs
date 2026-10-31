@@ -3,12 +3,12 @@
 
 use std::io::Write;
 
-use ykush3::Result;
+use ykush::Result;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn print_version(out: &mut impl Write) -> Result<()> {
-    writeln!(out, "ykush3cmd {VERSION}")?;
+    writeln!(out, "ykushctrl {VERSION}")?;
     Ok(())
 }
 
@@ -61,7 +61,7 @@ Board.
   -l                 list the serial number of every attached board
   -s SERIAL          send the command to that board rather than to the
                      first one the system enumerates
-  --no-wait          fail at once when another ykush3cmd is using the
+  --no-wait          fail at once when another ykushctrl is using the
                      board, instead of waiting up to 5 seconds for it
   --firmware-version, --bootloader-version
   --reset            restart the board
@@ -84,7 +84,7 @@ pub fn print_all(out: &mut impl Write, program: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ykush3::Error;
+    use ykush::Error;
 
     /// A writer whose every write fails, to exercise the output error paths.
     struct FailingWriter;
@@ -106,17 +106,17 @@ mod tests {
     fn the_help_names_the_version_the_usage_and_the_options() {
         let mut out = Vec::new();
 
-        print_all(&mut out, "ykush3cmd").unwrap();
+        print_all(&mut out, "ykushctrl").unwrap();
 
         let text = String::from_utf8(out).unwrap();
-        assert!(text.contains(&format!("ykush3cmd {VERSION}")));
-        assert!(text.contains("Usage: ykush3cmd"));
+        assert!(text.contains(&format!("ykushctrl {VERSION}")));
+        assert!(text.contains("Usage: ykushctrl"));
         assert!(text.contains("--i2c-write"));
         assert!(text.contains("--bootloader-version"));
         assert!(text.contains("--no-wait"));
         // The text names the figure; this keeps the two together.
         assert!(text.contains("up to 5 seconds"));
-        assert_eq!(ykush3::DEFAULT_WAIT, std::time::Duration::from_secs(5));
+        assert_eq!(ykush::DEFAULT_WAIT, std::time::Duration::from_secs(5));
     }
 
     #[test]
@@ -127,7 +127,7 @@ mod tests {
             Err(Error::Io(_))
         ));
         assert!(matches!(
-            print_usage(&mut FailingWriter, "ykush3cmd"),
+            print_usage(&mut FailingWriter, "ykushctrl"),
             Err(Error::Io(_))
         ));
         assert!(matches!(
@@ -135,7 +135,7 @@ mod tests {
             Err(Error::Io(_))
         ));
         assert!(matches!(
-            print_all(&mut FailingWriter, "ykush3cmd"),
+            print_all(&mut FailingWriter, "ykushctrl"),
             Err(Error::Io(_))
         ));
 
