@@ -187,7 +187,9 @@ mod linux {
                     Ok(()) => Attempt::Got(()),
                     Err(Errno::WOULDBLOCK) => Attempt::Busy(HELD.to_owned()),
                     // Interrupted by a signal: not taken, but nothing wrong.
-                    Err(Errno::INTR) => Attempt::Busy(HELD.to_owned()),
+                    Err(Errno::INTR) => {
+                        Attempt::Busy("taking the lock was interrupted by a signal".to_owned())
+                    }
                     Err(error) => Attempt::Failed(Error::Hid(format!(
                         "Cannot lock {}: {error}",
                         node.display()

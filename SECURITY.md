@@ -29,7 +29,9 @@ program:
 - denial of service by holding the device open; on Linux an invocation of
   this program waits at most five seconds for the lock described below and
   then gives up, and on macOS another program that seizes the device makes
-  this program's opens and writes fail while it holds it
+  this program's opens and writes fail while it holds it (measured on
+  2026-10-11 with a YKUSH3, see sidit77/async-hid#55, README section "Shared and
+  Exclusive Access")
 - interference between programs that have the device open at once, which
   neither Linux nor, with the current transport, macOS prevents; every answer
   goes to all of them - see below for what this program does about it and

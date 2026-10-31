@@ -84,7 +84,7 @@ sudo usermod -aG plugdev "$USER"      # takes effect at the next login
 Without the rule, every command that opens the board fails and names the rule file. `-l`
 works without it, since listing reads `/sys` and opens nothing.
 
-Three things work differently from macOS:
+Three things to know on Linux, the last one applies on macOS as well:
 
 - **The kernel's HID driver has to be bound to the board.** A program that drives the
   YKUSH3 through libusb - Yepkit's `ykushcmd`, the Debian package `ykush-control` among
@@ -95,11 +95,13 @@ Three things work differently from macOS:
   example `echo -n 1-1.4.4:1.0 | sudo tee /sys/bus/usb/drivers/usbhid/bind` with the
   interface name from the message.
 - **The board is not opened exclusively.** Linux lets several programs open the hidraw node
-  at once and delivers every answer to all of them, so two programs talking to the board at
-  the same time can read each other's answers. Invocations of `ykush3cmd` take turns: each
-  one takes an advisory `flock` on the board's `/dev/hidrawN` before it opens the board, and
-  the next one waits for it, see [Concurrent invocations](#concurrent-invocations). No lock
-  file is involved; the kernel drops the lock when the process ends, crash included.
+  at once and delivers every answer to all of them (the kernel copies each report into the
+  buffer of every open file, `hidraw_report_event` in `drivers/hid/hidraw.c`), so two
+  programs talking to the board at the same time can read each other's answers.
+  Invocations of `ykush3cmd` take turns: each one takes an advisory `flock` on the board's
+  `/dev/hidrawN` before it opens the board, and the next one waits for it, see
+  [Concurrent invocations](#concurrent-invocations). No lock file is involved; the kernel
+  drops the lock when the process ends, crash included.
 - **Other tools are not covered by that lock.** Yepkit's `ykushcmd`, or any other HID tool,
   run against the same board while `ykush3cmd` is running is not held back. A build of such a
   tool that goes through hidraw opens the node beside this program, and answers can reach
@@ -467,45 +469,41 @@ with no answer prepared fails the test as soon as anything reads from it, which 
 
 ### Coverage
 
-Measured with `-C instrument-coverage` across both runs. The figure depends on whether a
-board is attached, because the transport in `device.rs` is the one part that cannot be
-exercised without one:
+Line coverage with `-C instrument-coverage`, measured on 2026-10-31 on macOS on Apple silicon
+at the state of this README. The Linux-only code is not compiled there and not counted.
 
-| Condition | Lines | When measured |
+| Run | Lines | Missed |
 |---|---|---|
-| no board attached | 96.64 % | 2026-08-17, this state, reproducible by anyone |
-| board attached | 98.77 % | 2026-08-17, this state, board `Y3N13808` on firmware 1.5.0 |
+| `cargo test` only, no board needed | 90.36 % | 215 of 2231 |
+| `cargo test` and the hardware run, board `Y3N13808` on firmware 1.5.0 attached | 96.91 % | 69 of 2231 |
 
-`cli.rs`, `error.rs`, `fake.rs` and `sanitize.rs` are at 100 % either way; `ykush3.rs`
-misses four lines. Of the 52 lines missing without a board, 40 are in `device.rs`: opening
-the device, and the transfer and send paths behind it. A few of the rest are the failure
-messages of assertions that a passing test never reaches.
+`cli.rs`, `error.rs`, `fake.rs` and `sanitize.rs` are at 100 % in both runs. Without a board
+most missed lines are in `device.rs` (143), the transport that needs a device. With the board,
+what stays unreached is:
 
-With a board attached, what remains unreached is the residue below - plus the untaken half
-of the hardware test that re-applies the port state it finds, since only one of its two
-branches can run on any given day:
-
-| Place | Why it cannot be reached |
+| Place | Why it is not reached |
 |---|---|
-| `device.rs` - `Error::NoResponse` | would need a device that goes quiet for five seconds |
-| `device.rs` - truncated read | would need a device that delivers only part of a report |
-| `main.rs` - `unreachable!()` | help, version and listing are handled before a board is opened, so the branch is dead by construction |
+| `device.rs` - refused open | needs another program holding the device exclusively, or a vanishing board |
+| `device.rs` - `Error::NoResponse`, a failing read, discarding stale answers | needs a device that goes quiet for five seconds or reports a read error |
+| `device.rs` - truncated read | needs a device that delivers only part of a report |
+| `main.rs` - `unreachable!()` | help, version and listing are handled before a board is opened |
+| `lock.rs` - the error of a failed lock | needs the operating system to refuse the lock itself |
+| `device.rs`, `main.rs` - the hint for an empty list | with a board attached the list is never empty; on macOS the hint is always empty |
+| `help.rs` - a failing write of the usage text | needs standard output to fail |
+| the rest, about 15 lines | failure arms of assertions in tests, and the untaken half of the test that re-applies the port state it finds |
 
-Reaching 100 % would take contortions. Turning a documented invariant panic into an error
-path that can be triggered artificially does not make the code better. What could be
-measured was measured; what could not is written down here.
-
-Reproducing the measurement, with Homebrew LLVM and without `cargo-llvm-cov`:
+Reproducing the measurement, with the `llvm-tools` component of the toolchain
+(`rustup component add llvm-tools`; another LLVM may not read the profiles of this rustc) and
+without `cargo-llvm-cov`:
 
 ```
 export RUSTFLAGS="-C instrument-coverage" LLVM_PROFILE_FILE="/tmp/yk/%p-%m.profraw"
 cargo test && cargo test --no-fail-fast -- --ignored --test-threads=1
 llvm-profdata merge -sparse /tmp/yk/*.profraw -o /tmp/yk/yk.profdata
-llvm-cov report -object target/debug/deps/<lib-unittest-bin> \
-                -object target/debug/deps/<bin-unittest-bin> \
-                -object target/debug/deps/<cli-testbin> \
+llvm-cov report -object target/debug/deps/<every test binary> \
                 -object target/debug/ykush3cmd \
-                -instr-profile=/tmp/yk/yk.profdata
+                -instr-profile=/tmp/yk/yk.profdata \
+                -ignore-filename-regex='(\.cargo/|\.rustup/|/rustc/|/tests/)'
 ```
 
 `--no-fail-fast` matters without a board: the library's hardware tests fail first, and
@@ -544,8 +542,8 @@ tool would get it back.
 The same board on 2026-10-11, from a Raspberry Pi 4 under Debian 13 (kernel 6.18, aarch64),
 with an ST-Link debug probe on each of the three downstream ports and the udev rule from
 [Linux](#linux) in place. The switching and the comparison with `ykushcmd` ran on an early
-state of the Linux support, before `-l` named detached boards, both test suites again on the
-state that added it:
+state of the Linux support, before `-l` kept succeeding and named every detached board, both
+test suites again on the state that added it:
 
 | Area | What was run | Result |
 |---|---|---|
