@@ -40,8 +40,9 @@ switching over:
   - only the YKUSH3 board is covered; YKUSH, YKUSH2 and YKUSHXS are not
   - the messages are worded differently, so a script that parses the output of
     the original has to be adapted
-  - a command the board rejects exits with 1; the original never reads the
-    answer and exits with 0
+  - a command the board rejects exits with 69, and every error has an exit
+    status that says what to do next; the original never reads the answer and
+    exits with 0
   - the state of the external 5V port is decoded, which the original omits
   - the length of an I2C read is transmitted as a single byte, correcting a
     conversion in the original that corrupts the report for ten bytes and more
