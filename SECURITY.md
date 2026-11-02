@@ -33,9 +33,9 @@ program:
   2026-10-11 with a YKUSH3, see sidit77/async-hid#55, README section "Shared and
   Exclusive Access")
 - interference between programs that have the device open at once, which
-  neither Linux nor, with the current transport, macOS prevents; every answer
-  goes to all of them - see below for what this program does about it and
-  what it cannot do
+  Linux does not prevent; every answer goes to all of them. On macOS this
+  program opens the device exclusively. See below for what it does about it
+  and what it cannot do
 
 ## Concurrent use
 
@@ -54,18 +54,18 @@ wait and then fail; that is the denial of service above, with a limit.
 
 The rule that follows: **one YKUSH3 tool per host**.
 
-On macOS, concurrent invocations are **not serialized today**. This program
-takes no lock there and relies on the system refusing a second open, which
-it does not do with the current transport: the refusal was observed with the
-earlier `hidapi` transport, which asked for exclusive access, and the current
-one does not ask. Measured on 2026-10-11, two invocations running side by
-side read each other's answers in about half the runs. A status read detects
-that, because the answer names the port it describes; a switching command
-does not reliably, because identical commands are echoed identically.
+On macOS this program opens the device exclusively (seized,
+`Access::Exclusive` from sidit77/async-hid#55). While it holds the device,
+every other open through the HID stack fails, from this program or any
+other, and a second invocation waits for the first. A program that already
+had the device open keeps its handle, but its writes fail while the seize
+lasts. A tool that bypasses the HID stack is not covered. In turn, another
+program that seizes the device makes this one wait and then fail, the
+denial of service above.
 
-The rule on macOS is **one invocation at a time per board**. Planned: an
-open in seize mode in the transport, expected to make macOS refuse a second
-open (not yet measured).
+Measured on 2026-11-02 on a Mac with a YKUSH3: two invocations reading at
+the same time failed in none of 5080 runs; before the exclusive open, on
+2026-10-11, they read each other's answers in about half the runs.
 
 ## What has already been looked at
 

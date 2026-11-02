@@ -22,6 +22,14 @@ reached and who may open it.
   does not. The library gains `Error::exit_code()` and the variants
   `Unavailable`, `PermissionDenied` and `Rejected`; a refusal (status
   `0x00`) and an answer that does not fit the request are now told apart.
+- macOS: the board is opened exclusively (seized), so a second invocation,
+  or any other program, cannot open it at the same time; it waits up to 5
+  seconds like on Linux, or fails at once with `--no-wait`. Needs
+  `Access::Exclusive` from sidit77/async-hid#55; `async-hid` is pinned to
+  that revision on the fork until it is released. Measured on a Mac with a
+  board: two parallel loops failed in none of 5080 runs, against about half
+  before. The pin also moves the Linux transport from 0.5.3 to
+  0.6.0 of the fork, not yet run on the Raspberry Pi.
 - Renamed: the program is `ykushctrl`, the package `ykushctrl`, the library
   `ykush` (was `ykush3cmd` and `ykush3`), and the repository `ykush-rs`. The
   board it supports is still the YKUSH3 only. The udev rule file is
@@ -54,16 +62,8 @@ reached and who may open it.
   ends; no lock file is involved. Before this, two invocations on Linux could
   read each other's answers: two loops asking for ports 1 and 2 in parallel
   failed in 225 of 450 runs, and none fail now.
-- On macOS, concurrent invocations are not serialized yet. macOS does not
-  refuse a second open with the current transport, so answers can reach the
-  wrong process: the same two loops failed in 2534 of 5073 runs. A status
-  read detects it through the port check, a switching command does not
-  reliably. The rule is one invocation at a time per board; README and
-  `SECURITY.md` say so. Planned: an open in seize mode in the transport,
-  expected to make macOS refuse a second open (not yet measured). A refused
-  open is already retried; today that happens only for an open refused for
-  another reason, such as an unplugged board or a missing permission, and
-  then costs the wait.
+- On macOS, before the exclusive open (see above), concurrent invocations
+  were not serialized: the same two loops failed in 2534 of 5073 runs.
 - `--no-wait`: fail at once when the board is in use, instead of waiting.
 - `Board::open_within()` and `Ykush3::open_within()` take the time to wait,
   `DEFAULT_WAIT` is the five seconds `open()` waits, and `Error::Busy` is

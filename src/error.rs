@@ -21,16 +21,16 @@ pub enum Error {
     /// The system denied access to the board; on Linux the udev rule is
     /// missing or the user is not in its group.
     PermissionDenied,
-    /// The HID stack refused the operation. Carries the message rather than
-    /// the error type of the HID library, which would otherwise become part of
-    /// this library's public interface and tie it to that library's major
-    /// version.
+    /// The HID transport failed: the stack refused the operation, or a report
+    /// came back short. Carries the message rather than the error type of the
+    /// HID library, which would otherwise become part of this library's public
+    /// interface and tie it to that library's major version.
     Hid(String),
     /// The board did not answer within the read timeout.
     NoResponse,
     /// The board could not be taken because another invocation had it, and
-    /// it did not come free in time. On macOS the reason is a guess: the
-    /// system refused the open without saying why.
+    /// it did not come free in time. On macOS the system reports the board as
+    /// held exclusively, but not by whom.
     Busy {
         /// The board, by its serial number.
         serial: String,

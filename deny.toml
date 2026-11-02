@@ -33,6 +33,7 @@ wildcards = "deny"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# The transport is pinned to a revision of the fork until sidit77/async-hid#46
-# is released. This is the only git source, and it is meant to disappear again.
+# The transport is pinned to a revision of the fork until 0.6.0 with
+# sidit77/async-hid#55 is released. This is the only git source, and it is
+# meant to disappear again.
 allow-git = ["https://github.com/gerhard-schuster/async-hid"]

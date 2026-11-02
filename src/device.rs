@@ -21,6 +21,8 @@ use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
+use async_hid::Access;
 use async_hid::{AsyncHidRead, AsyncHidWrite, Device, DeviceReaderWriter, HidBackend};
 use futures_lite::{future, StreamExt};
 
@@ -79,8 +81,9 @@ pub(crate) fn report(payload: &[u8]) -> Report {
 pub struct Board {
     /// Every exchange needs the handle mutably while [`Transport`] hands out a
     /// shared reference. A cell bridges the two, which costs nothing here: a
-    /// board is driven from one thread at a time. Neither macOS nor Linux
-    /// refuses a second open, see the README on concurrent use.
+    /// board is driven from one thread at a time. On macOS the handle holds
+    /// the board exclusively; on Linux the turn below keeps other
+    /// invocations out, see the README on concurrent use.
     dev: RefCell<DeviceReaderWriter>,
 
     /// Set when a read timed out. The answer may still arrive afterwards and
@@ -121,21 +124,23 @@ impl Board {
             (turn, future::block_on(device.open()).map_err(open_failed)?)
         };
 
-        // macOS: no lock; a refused open is repeated. With this transport the
-        // system does not refuse a second open, so this protects nothing yet,
-        // see crate::lock.
+        // macOS: the handle itself is the turn. The board is opened
+        // exclusively (seized), so every other open fails with Busy until
+        // this handle is dropped, and such an open is repeated. See
+        // crate::lock.
         #[cfg(target_os = "macos")]
         let dev = {
             use crate::lock::Attempt;
 
             let (found, device) = future::block_on(choose(serial))?;
-            crate::lock::wait_for(&found, wait, || match future::block_on(device.open()) {
-                Ok(dev) => Attempt::Got(dev),
-                Err(error) if refused_as_busy(&error) => Attempt::Busy(format!(
-                    "the system refused to open it, possibly because another program \
-                     has it open ({error})"
-                )),
-                Err(error) => Attempt::Failed(open_failed(error)),
+            crate::lock::wait_for(&found, wait, || {
+                match future::block_on(device.open_options().access(Access::Exclusive).open()) {
+                    Ok(dev) => Attempt::Got(dev),
+                    Err(error) if refused_as_busy(&error) => {
+                        Attempt::Busy(crate::lock::HELD_EXCLUSIVELY.to_owned())
+                    }
+                    Err(error) => Attempt::Failed(open_failed(error)),
+                }
             })?
         };
 
@@ -401,21 +406,13 @@ async fn choose(serial: Option<&str>) -> Result<(String, Device)> {
     })
 }
 
-/// Whether macOS refused an open because the device is held elsewhere, which
-/// waiting may cure.
-///
-/// IOKit says so with `kIOReturnExclusiveAccess`, but the transport discards
-/// the return code and reports every refused open with the same message. So
-/// any refused open counts: a refusal that has another cause costs the wait
-/// and is then reported with the transport's own words.
+/// Whether an open failed because another handle holds the board
+/// exclusively, which waiting may cure. The transport reports exactly that
+/// as `Busy` (`kIOReturnExclusiveAccess` on macOS); every other failure is
+/// reported at once.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn refused_as_busy(error: &async_hid::HidError) -> bool {
-    match error {
-        async_hid::HidError::Message(msg) => {
-            msg == "Failed to open device" || msg.contains("exclusive access")
-        }
-        _ => false,
-    }
+    matches!(error, async_hid::HidError::Busy)
 }
 
 /// The hidraw node of a board found by the transport.
@@ -687,17 +684,21 @@ mod tests {
     }
 
     #[test]
-    fn only_a_refused_open_counts_as_a_board_in_use() {
+    fn only_busy_from_the_transport_counts_as_a_board_in_use() {
         use async_hid::HidError;
 
-        assert!(refused_as_busy(&HidError::message("Failed to open device")));
-        assert!(refused_as_busy(&HidError::message(
+        assert!(refused_as_busy(&HidError::Busy));
+        // The messages the earlier transport used for a refused open are
+        // ordinary failures now; the transport reports a seized device as
+        // Busy (sidit77/async-hid#55).
+        assert!(!refused_as_busy(&HidError::message(
+            "Failed to open device"
+        )));
+        assert!(!refused_as_busy(&HidError::message(
             "exclusive access and device already open"
         )));
         assert!(!refused_as_busy(&HidError::NotConnected));
-        assert!(!refused_as_busy(&HidError::message(
-            "Failed to read input report size"
-        )));
+        assert!(!refused_as_busy(&HidError::Unsupported));
         assert!(!refused_as_busy(&os_error(
             std::io::ErrorKind::PermissionDenied
         )));
@@ -713,9 +714,10 @@ mod tests {
     /// Everything below needs a YKUSH3 attached and is skipped by default.
     ///
     /// Run with `cargo test -- --ignored --test-threads=1`. The single thread is
-    /// not optional. Neither macOS nor Linux refuses a second open, and each
-    /// answer reaches every open handle, so tests running side by side would
-    /// read each other's answers.
+    /// not optional. On Linux a second open is not refused and each answer
+    /// reaches every open handle, so tests running side by side would read
+    /// each other's answers; on macOS the exclusive open makes them wait for
+    /// each other.
     mod hardware {
         use super::*;
 
@@ -807,20 +809,12 @@ mod tests {
         }
 
         /// A board this process holds is not handed out a second time. On
-        /// Linux that is the flock. On macOS it would be the system refusing
-        /// the second open, which it does not do today: the transport opens
-        /// without asking for exclusive access, so the second open goes
-        /// through. The test is therefore expected to fail there until the
-        /// planned seize-mode open in the transport, which is expected to
-        /// change that (not yet measured). If it does, the expectation below
-        /// makes the test fail, as a reminder to drop it.
+        /// Linux that is the flock, on macOS the exclusive open: the system
+        /// refuses the second open with Busy. Passes on macOS since the
+        /// exclusive open (2026-11-02).
         /// Read-only: nothing is sent to the board.
         #[test]
         #[ignore = "needs a YKUSH3 attached"]
-        #[cfg_attr(
-            target_os = "macos",
-            should_panic(expected = "a second open should be refused as busy")
-        )]
         fn a_held_board_is_not_opened_a_second_time() {
             attached();
 

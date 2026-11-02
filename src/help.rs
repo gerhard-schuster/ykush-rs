@@ -61,8 +61,8 @@ Board.
   -l                 list the serial number of every attached board
   -s SERIAL          send the command to that board rather than to the
                      first one the system enumerates
-  --no-wait          fail at once when another ykushctrl is using the
-                     board, instead of waiting up to 5 seconds for it
+  --no-wait          fail at once when the board is in use, instead of
+                     waiting up to 5 seconds for it
   --firmware-version, --bootloader-version
   --reset            restart the board
   --boot             stop in the bootloader, ready for a firmware image

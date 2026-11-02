@@ -83,7 +83,8 @@ sudo usermod -aG plugdev "$USER"      # takes effect at the next login
 Without the rule, every command that opens the board fails and names the rule file. `-l`
 works without it, since listing reads `/sys` and opens nothing.
 
-Three things to know on Linux, the last one applies on macOS as well:
+Three things to know on Linux, the last one applies on macOS in part (see
+[Concurrent invocations](#concurrent-invocations)):
 
 - **The kernel's HID driver has to be bound to the board.** A program that drives the
   YKUSH3 through libusb - Yepkit's `ykushcmd`, the Debian package `ykush-control` among
@@ -215,22 +216,33 @@ How the turn is held differs:
   finds the board. The kernel releases the lock when the process ends, however it ends. The
   lock orders the instances of this program, and programs built on its library, among
   themselves - nothing else asks for it, see [Linux](#linux).
-- **macOS**: **not serialized today.** macOS does not refuse a second open with the current
-  transport, so concurrent invocations run side by side and an answer can reach the wrong
-  process. Measured on 2026-10-11: two loops asking for ports 1 and 2 at the same time
-  failed in 2534 of 5073 runs, each failure an answer meant for the other loop. A status
-  read notices this, because the answer names the port and is checked against the request.
-  A switching command does not reliably notice it: identical commands are echoed
-  identically, so an answer taken from another process looks like one's own. The refusal
-  the README used to describe was seen with the earlier `hidapi` transport, which asked for
-  exclusive access; the current one does not.
+- **macOS**: the board is opened exclusively (seized, `Access::Exclusive` of the transport,
+  from sidit77/async-hid#55, pinned until it is released). While one handle holds the board,
+  every other open fails, in this process and in any other, and is repeated until the time is
+  up; the message then reads `another program holds it exclusively`, since the system does
+  not say who. Closing the handle, or the end of the process, releases the board. The seize
+  also holds back programs that do not know about this one, and a program that already had
+  the board open loses its writes while the seize lasts.
 
-  **Rule on macOS: one invocation at a time per board.** Planned: an open in seize mode in
-  the transport, expected to make macOS refuse a second open (not yet measured). The code
-  already repeats a refused open until the time is up. Today that happens only for an open
-  refused for another reason, such as a board being unplugged or a missing permission, and
-  then costs the wait before the error is reported. The hardware test `a_held_board_is_not_opened_a_second_time` is
-  marked as expected to fail on macOS until then.
+  What the transport does under a seize was measured in sidit77/async-hid#55 (2026-10-11,
+  YKUSH3 on Apple silicon). With this program, measured on 2026-11-02 on a Mac (Apple silicon) with board `Y3N13808`,
+  release builds of the commit before the exclusive open and of the exclusive open:
+
+  | Run | Shared open (before) | Exclusive open |
+  |---|---|---|
+  | two loops reading ports 1 and 2 at the same time, 2 x 500 | 496 failed, each an answer meant for the other loop (exit 76) | none failed |
+  | the same, 2 x 2540 | - | none failed in 5080 runs |
+  | the same with `--no-wait`, 2 x 300 | - | 300 succeeded, 300 found the board in use (exit 75), nothing else |
+
+  The hardware test `a_held_board_is_not_opened_a_second_time` passes on macOS, and so do the
+  other hardware tests that do not switch a port; the switching test was left out because a
+  board hung on one of the ports.
+
+  Before the exclusive open, measured on 2026-10-11: two loops asking for ports 1 and 2 at
+  the same time failed in 2534 of 5073 runs, each failure an answer meant for the other loop.
+  A status read notices this, because the answer names the port and is checked against the
+  request. A switching command does not reliably notice it: identical commands are echoed
+  identically, so an answer taken from another process looks like one's own.
 
 Boards with different serial numbers do not wait for each other.
 
@@ -466,9 +478,10 @@ Every push runs the first line on macOS and on Linux, along with `cargo fmt --ch
 with warnings denied, and a build against the `rust-version` from `Cargo.toml` so that
 figure stays honest.
 
-The second run **must** be single threaded. Neither macOS nor Linux refuses a second open of
-the board, and each answer reaches every open handle, so tests running side by side would
-read each other's answers.
+The second run **must** be single threaded. On Linux a second open of the board is not
+refused and each answer reaches every open handle, so tests running side by side would read
+each other's answers; on macOS the exclusive open makes them wait for each other and run
+into the five second limit.
 
 | Group | Tests | Subject |
 |---|---|---|
@@ -481,7 +494,7 @@ read each other's answers.
 | `tests/encoding.rs` | 6 | every file is valid UTF-8 within Latin-1, and the rule itself |
 | doctest | 1 | the library example compiles; `no_run`, since it needs a board |
 | **running without hardware** | **143 + 1**, on Linux **148 + 1** | |
-| `--ignored`, needs a board | 9, on Linux 12 | opening and real exchanges, the acknowledged switch, the echoed pin and port, 2000 status reads on one handle, a second open of a held board refused as busy (expected to fail on macOS today, see above); on Linux the built binary against a lock held by another process, with and without `--no-wait` |
+| `--ignored`, needs a board | 9, on Linux 12 | opening and real exchanges, the acknowledged switch, the echoed pin and port, 2000 status reads on one handle, a second open of a held board refused as busy; on Linux the built binary against a lock held by another process, with and without `--no-wait` |
 | `--ignored`, needs only the HID stack | 2 | enumeration when nothing is attached |
 
 The long one among the board tests reads port states 2000 times over one handle and checks
@@ -497,7 +510,8 @@ with no answer prepared fails the test as soon as anything reads from it, which 
 ### Coverage
 
 Line coverage with `-C instrument-coverage`, measured on 2026-10-31 on macOS on Apple silicon
-at the state of this README. The Linux-only code is not compiled there and not counted.
+at commit 83c3327, before the exclusive open on macOS. The Linux-only code is not compiled
+there and not counted.
 
 | Run | Lines | Missed |
 |---|---|---|
@@ -634,10 +648,11 @@ What turned up beyond what the documentation says:
   answer with nothing on the I2C header, so the method is sound for finding a device once
   one is there.
 - **The board could only be open once** on macOS with the earlier `hidapi` transport. A
-  second attempt failed with "exclusive access and device already open". With the current
-  transport that no longer holds: a second open succeeds and both handles receive every
-  answer, see [Concurrent invocations](#concurrent-invocations). Linux does not refuse the
-  second open either, see [Linux](#linux).
+  second attempt failed with "exclusive access and device already open". The transport
+  that followed opened shared, and a second open succeeded with both handles receiving
+  every answer. Since the exclusive open of the current transport a second open fails
+  again, measured on 2026-11-02, see [Concurrent invocations](#concurrent-invocations).
+  Linux does not refuse the second open, see [Linux](#linux).
 - **The connector is the most common fault.** When the USB 3.0 micro-B plug is not seated
   fully, only the SuperSpeed hub appears; the USB 2.0 hub and the controller are missing and
   the board cannot be reached even though the power LED is lit. Check the plug before

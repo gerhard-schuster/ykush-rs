@@ -22,10 +22,12 @@ fake = []
 
 [dependencies]
 # Not from crates.io: 0.5.3 stops delivering input reports on macOS after a
-# few hundred writes on a handle that stays open, which is exactly how a test
-# rig drives a board. The fix is sidit77/async-hid#46, pinned here by revision
-# until it is released. Switch back to a version requirement once it is.
-async-hid = { version = "0.5", git = "https://github.com/gerhard-schuster/async-hid", rev = "9b9729b3f5a2dea2bb64f852a9200685bfa7e1f6" }
+# few hundred writes on a handle that stays open (fixed by
+# sidit77/async-hid#46, in upstream main), and the exclusive open on macOS
+# needs OpenOptions from sidit77/async-hid#55, not merged yet. Pinned to the
+# revision of #55 on the fork; switch to a version requirement once 0.6.0
+# with #55 is released.
+async-hid = { version = "0.6", git = "https://github.com/gerhard-schuster/async-hid", rev = "1d1a2bf422219b1332f1a46ec4b9b1bc1b29e08e" }
 # block_on and the stream adapter for enumeration; async-io only for the timer
 # the read races against, since async-hid has no timed read.
 async-io = "2"

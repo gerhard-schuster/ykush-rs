@@ -13,20 +13,19 @@
 //!   while the handle the exchange runs over stays as it is. The kernel drops
 //!   the lock when the process ends, however it ends, so there is no lock
 //!   file to leave behind or clean up.
-//! - **macOS** has no lock here: a refused open is repeated until it goes
-//!   through. That serializes nothing today. The refusal was observed with
-//!   the earlier hidapi transport, which asked for exclusive access; the
-//!   current transport opens without that option, and on 2026-10-11 a second
-//!   open of a held board went through on a Mac and both handles received
-//!   every answer. So today the retry fires only for an open refused for
-//!   another reason, such as a board being unplugged or a missing
-//!   permission, and then costs the wait before the error is reported. It
-//!   is kept for the planned open in seize mode in the transport, which is
-//!   expected to make macOS refuse a second open (not yet measured).
+//! - **macOS** has no node to lock. There the board is opened exclusively
+//!   (seized, `Access::Exclusive` of the transport, sidit77/async-hid#55):
+//!   while one handle holds it, every other open fails with `Busy`, in this
+//!   process and in any other. A refused open is repeated until it goes
+//!   through. The handle is the turn, and closing it - on drop, or when the
+//!   process ends - ends the turn.
 //!
-//! The lock is advisory. It orders the programs that ask for it - every
-//! instance of `ykushctrl`, and any program built on this library - among
-//! themselves. A tool that opens the node without asking is not held back.
+//! On Linux the lock is advisory. It orders the programs that ask for it -
+//! every instance of `ykushctrl`, and any program built on this library -
+//! among themselves. A tool that opens the node without asking is not held
+//! back. On macOS the seize holds back every program that opens the board
+//! through the HID stack, and a program that already had it open loses its
+//! writes while the seize lasts.
 
 use std::time::{Duration, Instant};
 
@@ -42,6 +41,11 @@ use crate::error::{Error, Result};
 /// its own five second read timeout - and waiting longer would not help; the
 /// caller learns that within the same time the read timeout already allows.
 pub const DEFAULT_WAIT: Duration = Duration::from_secs(5);
+
+/// What the user is told when the board is held exclusively elsewhere, on
+/// macOS. The system does not say by whom.
+#[cfg(target_os = "macos")]
+pub(crate) const HELD_EXCLUSIVELY: &str = "another program holds it exclusively";
 
 /// Pause between two attempts. Short against the time one invocation holds
 /// the board, long enough that a waiting process does not spin.
