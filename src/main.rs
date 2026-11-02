@@ -30,18 +30,18 @@ fn main() -> ExitCode {
 
     match run(&program, args.get(1..).unwrap_or_default(), &mut out) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(Error::Usage(msg)) => {
-            let _ = writeln!(io::stderr(), "{msg}\n");
-            let _ = help::print_usage(&mut io::stderr(), &program);
-            let _ = writeln!(
-                io::stderr(),
-                "\nRun '{program} -h' for the list of options."
-            );
-            ExitCode::FAILURE
-        }
         Err(err) => {
-            let _ = writeln!(io::stderr(), "{err}");
-            ExitCode::FAILURE
+            if let Error::Usage(msg) = &err {
+                let _ = writeln!(io::stderr(), "{msg}\n");
+                let _ = help::print_usage(&mut io::stderr(), &program);
+                let _ = writeln!(
+                    io::stderr(),
+                    "\nRun '{program} -h' for the list of options."
+                );
+            } else {
+                let _ = writeln!(io::stderr(), "{err}");
+            }
+            ExitCode::from(err.exit_code())
         }
     }
 }

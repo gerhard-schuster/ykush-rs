@@ -212,10 +212,7 @@ impl Transport for Board {
             // The board always answers with a full report. Anything shorter
             // would leave the zero padding of the buffer to be read as answer
             // bytes, so it is rejected rather than interpreted.
-            Some(Ok(read)) if read != REPORT_SIZE => Err(Error::Device(format!(
-                "Truncated answer from the board: {read} of {REPORT_SIZE} bytes"
-            ))),
-            Some(Ok(_)) => Ok(resp),
+            Some(Ok(read)) => full_report(read).map(|()| resp),
         }
     }
 
@@ -268,7 +265,7 @@ fn open_failed(error: async_hid::HidError) -> Error {
     };
 
     if denied {
-        Error::Hid(PERMISSION_DENIED.to_owned())
+        Error::PermissionDenied
     } else {
         error.into()
     }
@@ -282,7 +279,7 @@ fn open_failed(error: async_hid::HidError) -> Error {
 /// then listed by `lsusb` and still invisible here, which a plain "not found"
 /// would leave unexplained.
 fn detached(serial: Option<&str>) -> Option<Error> {
-    detached_message(&detached_on_this_host(serial)).map(Error::Device)
+    detached_message(&detached_on_this_host(serial)).map(Error::Unavailable)
 }
 
 /// Why boards that `lsusb` shows are missing from the list, if any are.
@@ -429,11 +426,11 @@ fn refused_as_busy(error: &async_hid::HidError) -> bool {
 #[cfg(target_os = "linux")]
 fn hidraw_node_of(device: &Device) -> Result<std::path::PathBuf> {
     let async_hid::DeviceId::DevPath(sysfs) = &device.id else {
-        return Err(Error::Device("The YKUSH3 has no hidraw device".into()));
+        return Err(Error::Unavailable("The YKUSH3 has no hidraw device".into()));
     };
 
     hidraw_node(sysfs).ok_or_else(|| {
-        Error::Device(format!(
+        Error::Unavailable(format!(
             "No hidraw device node found for the YKUSH3 at {}",
             sysfs.display()
         ))
@@ -466,7 +463,12 @@ async fn attached_boards() -> Result<Vec<(String, Device)>> {
     static BACKEND: OnceLock<HidBackend> = OnceLock::new();
     let backend = BACKEND.get_or_init(HidBackend::default);
 
-    let mut devices = backend.enumerate().await?;
+    // A HID stack that cannot even list its devices is an unavailable
+    // service, not an I/O error that a retry would cure.
+    let mut devices = backend
+        .enumerate()
+        .await
+        .map_err(|e| Error::Unavailable(format!("Cannot list the HID devices: {e}")))?;
     while let Some(dev) = devices.next().await {
         if dev.vendor_id != VENDOR_ID || dev.product_id != PRODUCT_ID {
             continue;
@@ -482,9 +484,33 @@ async fn attached_boards() -> Result<Vec<(String, Device)>> {
     Ok(found)
 }
 
+/// A report shorter than 64 bytes is a failed transfer: the read came back
+/// short, and reading the zero padding of the buffer as answer bytes would
+/// turn it into a wrong answer. It is an I/O error, not an answer that does
+/// not fit the request.
+fn full_report(read: usize) -> Result<()> {
+    if read == REPORT_SIZE {
+        Ok(())
+    } else {
+        Err(Error::Hid(format!(
+            "Truncated answer from the board: {read} of {REPORT_SIZE} bytes"
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_truncated_report_is_an_io_error_not_an_unfitting_answer() {
+        assert!(full_report(REPORT_SIZE).is_ok());
+        for read in [0, 1, REPORT_SIZE - 1] {
+            let error = full_report(read).unwrap_err();
+            assert!(matches!(error, Error::Hid(_)), "{read}: {error:?}");
+            assert_eq!(error.exit_code(), 74);
+        }
+    }
 
     #[test]
     fn payload_is_padded_to_a_full_report() {
@@ -503,7 +529,8 @@ mod tests {
     fn a_refused_open_says_what_to_do_about_it() {
         let error = open_failed(os_error(std::io::ErrorKind::PermissionDenied));
 
-        assert!(matches!(&error, Error::Hid(msg) if msg == PERMISSION_DENIED));
+        assert!(matches!(&error, Error::PermissionDenied));
+        assert_eq!(error.to_string(), PERMISSION_DENIED);
         #[cfg(target_os = "linux")]
         assert!(error
             .to_string()
@@ -515,8 +542,9 @@ mod tests {
         let error = open_failed(os_error(std::io::ErrorKind::NotFound));
 
         assert!(matches!(&error, Error::Hid(msg) if msg != PERMISSION_DENIED));
+        // A board that went away while being opened is unavailable.
         let error = open_failed(async_hid::HidError::NotConnected);
-        assert!(matches!(&error, Error::Hid(msg) if msg != PERMISSION_DENIED));
+        assert!(matches!(&error, Error::Unavailable(_)), "{error:?}");
     }
 
     /// A stand-in for `/sys/bus/usb/devices`, removed again when dropped.

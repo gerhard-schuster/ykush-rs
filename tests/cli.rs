@@ -58,7 +58,7 @@ fn the_version_option_prints_only_the_version() {
 fn an_unknown_option_fails_with_a_usage_message_on_stderr() {
     let output = run(&["-x"]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(64));
     assert!(stderr(&output).contains("Unknown option -x"));
     assert!(stderr(&output).contains("Usage:"));
     assert!(stdout(&output).is_empty());
@@ -68,7 +68,7 @@ fn an_unknown_option_fails_with_a_usage_message_on_stderr() {
 fn an_invalid_value_fails_with_a_usage_message() {
     let output = run(&["-u", "9"]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(64));
     assert!(stderr(&output).contains("Invalid port number '9'"));
 }
 
@@ -76,7 +76,7 @@ fn an_invalid_value_fails_with_a_usage_message() {
 fn an_unknown_serial_number_fails_without_a_usage_message() {
     let output = run(&["-s", "no-such-board", "-g", "1"]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(69));
     assert!(stderr(&output).contains("No YKUSH3 board with serial number no-such-board found"));
     // A board that is not there is not a usage error, so no usage text.
     assert!(!stderr(&output).contains("Usage:"));
@@ -94,7 +94,7 @@ fn an_argument_that_is_not_unicode_is_a_usage_error_not_a_crash() {
         .output()
         .expect("the binary should run");
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(64));
     assert!(stderr(&output).contains("Unknown option"));
     assert!(!stderr(&output).contains("panicked"));
 }
@@ -105,7 +105,7 @@ fn control_characters_in_an_argument_are_not_echoed_to_the_terminal() {
     // able to smuggle an ANSI escape sequence onto stderr through it.
     let output = run(&["-\x1b[31mboo"]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(64));
     assert!(stderr(&output).contains("Unknown option -?[31mboo"));
 }
 
@@ -121,7 +121,7 @@ fn the_board_name_prefix_of_the_cpp_application_is_accepted() {
 fn no_wait_changes_nothing_about_a_board_that_is_not_there() {
     let output = run(&["--no-wait", "-s", "no-such-board", "-g", "1"]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(69));
     assert!(stderr(&output).contains("No YKUSH3 board with serial number no-such-board found"));
 }
 
@@ -129,7 +129,7 @@ fn no_wait_changes_nothing_about_a_board_that_is_not_there() {
 fn no_wait_with_a_value_is_a_usage_error() {
     let output = run(&["--no-wait", "5", "-g", "1"]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(64));
     assert!(stderr(&output).contains("Option --no-wait takes no value"));
     assert!(stderr(&output).contains("Usage:"));
 }
@@ -203,7 +203,7 @@ mod held_by_another_process {
         let _ = holder.kill();
         let _ = holder.wait();
 
-        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(output.status.code(), Some(75));
         assert!(
             stderr(&output).contains("is not available: another ykushctrl is using it"),
             "{}",
@@ -223,7 +223,7 @@ mod held_by_another_process {
         let _ = holder.kill();
         let _ = holder.wait();
 
-        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(output.status.code(), Some(75));
         assert!(
             stderr(&output).contains("still not available after 5.0 s"),
             "{}",

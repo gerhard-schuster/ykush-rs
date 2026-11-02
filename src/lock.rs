@@ -136,7 +136,7 @@ pub(crate) fn take_stable<D, L, N: PartialEq + std::fmt::Debug>(
         drop(held);
     }
 
-    Err(Error::Device(
+    Err(Error::Unavailable(
         "The YKUSH3 kept changing its device node while waiting for it; check the cable and \
          try again"
             .into(),
@@ -176,7 +176,7 @@ mod linux {
         pub(crate) fn take(node: &Path, serial: &str, wait: Duration) -> Result<NodeLock> {
             let file = File::open(node).map_err(|error| {
                 if error.kind() == std::io::ErrorKind::PermissionDenied {
-                    Error::Hid(crate::device::PERMISSION_DENIED.to_owned())
+                    Error::PermissionDenied
                 } else {
                     Error::Hid(format!("Cannot open {}: {error}", node.display()))
                 }
@@ -554,7 +554,7 @@ mod tests {
             |_, _, wait| lock.take(wait),
         );
 
-        assert!(matches!(&result, Err(Error::Device(msg)) if msg.contains("kept changing")));
+        assert!(matches!(&result, Err(Error::Unavailable(msg)) if msg.contains("kept changing")));
         assert!(!lock.is_held(), "the last lock should be let go");
     }
 

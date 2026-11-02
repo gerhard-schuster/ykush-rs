@@ -120,6 +120,8 @@ mod op {
 
     /// First byte of a successful answer.
     pub const ACK: u8 = 0x01;
+    /// The board did not accept the command.
+    pub const NAK: u8 = 0x00;
     /// Status of an I2C transfer: the board is not in master mode.
     pub const I2C_NOT_MASTER: u8 = 0x02;
     /// Status of an I2C transfer: the transfer on the bus failed.
@@ -384,13 +386,16 @@ impl<T: Transport> Ykush3<T> {
     /// working hardware.
     fn request_acked(&self, payload: &[u8]) -> Result<Report> {
         let resp = self.request(payload)?;
-        if resp[0] != op::ACK {
-            return Err(Error::Device(format!(
+        match resp[0] {
+            op::ACK => Ok(resp),
+            op::NAK => Err(Error::Rejected(format!(
                 "The board rejected the command (answer 0x{:02x})",
                 resp[0]
-            )));
+            ))),
+            other => Err(Error::Device(format!(
+                "Unexpected answer to the command (status 0x{other:02x})"
+            ))),
         }
-        Ok(resp)
     }
 
     /// Sends a command that the board does not answer.
@@ -414,14 +419,17 @@ fn gpio_code(gpio: u8) -> Result<u8> {
 }
 
 fn expect_ack(resp: &Report, opcode: u8) -> Result<()> {
-    if resp[0] == op::ACK && resp[1] == opcode {
-        return Ok(());
+    match (resp[0], resp[1] == opcode) {
+        (op::ACK, true) => Ok(()),
+        (op::NAK, true) => Err(Error::Rejected(format!(
+            "The board rejected the command (answer 0x{:02x} 0x{:02x})",
+            resp[0], resp[1]
+        ))),
+        _ => Err(Error::Device(format!(
+            "Unexpected answer to the command (0x{:02x} 0x{:02x})",
+            resp[0], resp[1]
+        ))),
     }
-
-    Err(Error::Device(format!(
-        "The board rejected the command (answer 0x{:02x} 0x{:02x})",
-        resp[0], resp[1]
-    )))
 }
 
 /// Checks the answer to an I2C transfer, whose status byte carries a reason.
@@ -435,10 +443,13 @@ fn expect_i2c_ack(resp: &Report) -> Result<()> {
 
     match resp[0] {
         op::ACK => Ok(()),
-        op::I2C_NOT_MASTER => Err(Error::Device(
+        op::I2C_NOT_MASTER => Err(Error::Rejected(
             "The board is not in I2C master mode, enable it with --i2c-master enable".into(),
         )),
-        op::I2C_BUS_ERROR => Err(Error::Device("I2C transmission error".into())),
+        op::I2C_BUS_ERROR => Err(Error::Rejected("I2C transmission error".into())),
+        op::NAK => Err(Error::Rejected(
+            "The board rejected the I2C transfer".into(),
+        )),
         status => Err(Error::Device(format!(
             "The board reported an unknown I2C status (0x{status:02x})"
         ))),
@@ -582,7 +593,7 @@ mod tests {
         ];
 
         for (name, result) in rejected {
-            assert!(matches!(result, Err(Error::Device(_))), "{name}");
+            assert!(matches!(result, Err(Error::Rejected(_))), "{name}");
         }
     }
 
@@ -612,7 +623,7 @@ mod tests {
         // status byte check the rejection would read as a valid state.
         let (result, _) = exchange(&[0x00, 0x11], |b| b.port_status(Port::Downstream(1)), 1);
 
-        assert!(matches!(result, Err(Error::Device(_))));
+        assert!(matches!(result, Err(Error::Rejected(_))));
     }
 
     #[test]
@@ -620,7 +631,7 @@ mod tests {
         let (no_ack, _) = exchange(&[0x00, 0x30, 0x02, 0x01], |b| b.read_io(2), 2);
         let (wrong_echo, _) = exchange(&[0x01, 0x41, 0x02, 0x01], |b| b.read_io(2), 2);
 
-        assert!(matches!(no_ack, Err(Error::Device(_))));
+        assert!(matches!(no_ack, Err(Error::Rejected(_))));
         assert!(matches!(wrong_echo, Err(Error::Device(_))));
     }
 
@@ -767,7 +778,7 @@ mod tests {
     fn i2c_config_reports_a_rejected_command() {
         let (result, _) = exchange(&[0x00, 0x51], |b| b.i2c_slave(true), 3);
 
-        assert!(matches!(result, Err(Error::Device(_))));
+        assert!(matches!(result, Err(Error::Rejected(_))));
     }
 
     #[test]
@@ -862,6 +873,31 @@ mod tests {
         assert!(message(not_master).contains("not in I2C master mode"));
         assert!(message(bus_error).contains("I2C transmission error"));
         assert!(message(unknown).contains("0x7f"));
+    }
+
+    #[test]
+    fn a_refusal_and_an_answer_that_does_not_fit_are_told_apart() {
+        // 0x00 in the status byte is the board saying no; any other value
+        // that is not an ACK is an answer that does not fit the request,
+        // typically one meant for another exchange. A caller retries the
+        // second, not the first.
+        let (said_no, _) = exchange(&[0x00], |b| b.port_up(Port::Downstream(1)), 1);
+        let (garbled, _) = exchange(&[0x5a], |b| b.port_up(Port::Downstream(1)), 1);
+        let (said_no_ack, _) = exchange(&[0x00, 0x30, 0x02, 0x01], |b| b.read_io(2), 2);
+        let (garbled_ack, _) = exchange(&[0x5a, 0x30, 0x02, 0x01], |b| b.read_io(2), 2);
+        let (not_master, _) = exchange(&[0x02, 0x52], |b| b.i2c_write(0x20, &[0x01]), 5);
+        let (bus_error, _) = exchange(&[0x03, 0x52], |b| b.i2c_read(0x20, 2), 4);
+        let (unknown_i2c, _) = exchange(&[0x7f, 0x52], |b| b.i2c_read(0x20, 2), 4);
+        let (i2c_said_no, _) = exchange(&[0x00, 0x52], |b| b.i2c_read(0x20, 2), 4);
+
+        assert!(matches!(said_no, Err(Error::Rejected(_))));
+        assert!(matches!(garbled, Err(Error::Device(_))));
+        assert!(matches!(said_no_ack, Err(Error::Rejected(_))));
+        assert!(matches!(garbled_ack, Err(Error::Device(_))));
+        assert!(matches!(not_master, Err(Error::Rejected(_))));
+        assert!(matches!(bus_error, Err(Error::Rejected(_))));
+        assert!(matches!(unknown_i2c, Err(Error::Device(_))));
+        assert!(matches!(i2c_said_no, Err(Error::Rejected(_))));
     }
 
     #[test]

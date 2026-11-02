@@ -13,6 +13,15 @@ reached and who may open it.
 
 ### Changed
 
+- **Incompatible:** the exit status tells what to do next instead of being
+  `1` for every error, after sysexits(3): `64` invalid command line, `69` no
+  board, board unreachable or the board refused the command, `74` no answer
+  or transport error, `75` board in use, `76` an answer that does not fit
+  the request, `77` access denied. A script
+  that checks for a non-zero status keeps working; one that checks for `1`
+  does not. The library gains `Error::exit_code()` and the variants
+  `Unavailable`, `PermissionDenied` and `Rejected`; a refusal (status
+  `0x00`) and an answer that does not fit the request are now told apart.
 - Renamed: the program is `ykushctrl`, the package `ykushctrl`, the library
   `ykush` (was `ykush3cmd` and `ykush3`), and the repository `ykush-rs`. The
   board it supports is still the YKUSH3 only. The udev rule file is
@@ -39,7 +48,7 @@ reached and who may open it.
   Linux.
 - CI builds, lints and tests on Linux (arm64) as well as on macOS.
 - Concurrent invocations take turns at a board. The second one waits until
-  the first is done, up to five seconds, and then fails with exit status 1
+  the first is done, up to five seconds, and then fails with exit status 75
   and a message naming the board. On Linux the turn is an advisory `flock`
   on the board's hidraw node, which the kernel releases when the process
   ends; no lock file is involved. Before this, two invocations on Linux could

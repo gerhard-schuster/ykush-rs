@@ -121,8 +121,9 @@ ykushctrl ykush3 -u 1        # the same thing
 ```
 
 The **messages** deliberately are not compatible - they are worded independently, see
-[License](#license). A script that picks apart the output of the original needs adapting;
-a script that only looks at the exit status does not.
+[License](#license). A script that picks apart the output of the original needs adapting.
+So does one that relies on the original's exit codes, which say little: see
+[Exit status](#exit-status).
 
 | Option | Effect |
 |---|---|
@@ -147,8 +148,34 @@ a script that only looks at the exit status does not.
 | `--firmware-version` / `--bootloader-version` | print the versions |
 | `-v`, `--version` / `-h`, `--help` | version and help |
 
-Exit status: `0` on success, `1` on failure - board not found, board busy, invalid input,
-or the board rejecting the command.
+### Exit status
+
+The exit status tells a script what to do next; the values follow sysexits(3). The codes
+are a stable interface, the wording of the messages is not.
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `0` | success; also `-l` with no board attached | go on |
+| `64` | invalid command line | correct the call |
+| `69` | no board, unknown serial number, the board gone, HID driver detached, no hidraw node, a node that keeps changing, the HID stack cannot list devices; **the board refused the command**: status `0x00`, or an I2C transfer failed | stop, check the board and its connection |
+| `74` | no answer within the timeout, a truncated report, a transport error, output failed | retry if the command may be repeated |
+| `75` | the board is in use (waited 5 seconds, or `--no-wait`) | retry later |
+| `76` | an answer that does not fit the request: wrong echo, unknown status, wrong length | retry if the command may be repeated; if it recurs, check the board |
+| `77` | access denied (on Linux the udev rule is missing) | fix the setup |
+| `101` | a bug in this program (a Rust panic) | report it |
+
+**May be repeated** are switching a port on or off, configuring a port, writing a GPIO,
+enabling GPIO control, setting the I2C mode or address, and reading the board's own state
+(ports, GPIO, versions): they set a state or only read, so repeating them gives the same
+result.
+**Not** blindly repeatable are I2C transfers, since the slave may act on a write or a read
+twice (a counter, a FIFO), and `--reset` and `--boot`. After 74 or 76 the
+board may have carried out the command before the answer was lost.
+
+sysexits(3) has no code for a device that refuses a command. A refusal is a valid answer, not
+a protocol violation (`76`), so it gets the catch-all `69`. `77` is meant for permissions
+above the file system; a denied device node is a file system matter, but its cause is the
+setup, and that is what the code says. Before 0.5.0 every error was `1`.
 
 ```
 $ ykushctrl -l
@@ -166,7 +193,7 @@ Firmware 1.5.0
 ### Concurrent invocations
 
 Two invocations addressing the same board at the same time take turns: the second waits
-until the first is done, **up to 5 seconds**, and then gives up with exit status `1`:
+until the first is done, **up to 5 seconds**, and then gives up with exit status `75`:
 
 ```
 $ ykushctrl -g 1
@@ -335,7 +362,8 @@ of an answer is `0x01` on success and `0x00` on failure.
 
 `0x51` actions: `0x01` slave mode, `0x02` master mode, `0x03` set own address.
 `0x52` actions: `0x01` write, `0x02` read. Status values for `0x52`: `0x01` success,
-`0x02` the board is not in master mode, `0x03` a transmission error on the bus.
+`0x02` the board is not in master mode, `0x03` a transmission error on the bus; `0x00`
+is the general failure status, as for every command.
 
 The table was derived from the C++ original and checked against the vendor reference. Two
 things `ykushcmd` uses are **not** documented anywhere: `-c` with port `e`, the external 5V
@@ -427,8 +455,8 @@ command line application.
 ## Tests
 
 ```
-cargo test                                    # 139 tests and a doctest, no
-                                              # hardware needed (144 on Linux)
+cargo test                                    # 143 tests and a doctest, no
+                                              # hardware needed (148 on Linux)
 cargo test -- --ignored --test-threads=1      # 11 more: 9 need a board, 2 only
                                               # the HID stack of the system;
                                               # on Linux 3 more that need a board
@@ -445,14 +473,14 @@ read each other's answers.
 | Group | Tests | Subject |
 |---|---|---|
 | `cli` | 36 | grammar, board selection, `--no-wait`, every command, every error message |
-| `ykush3` | 39 | the bytes each command sends, reading answers, error paths, a swept and a hand-picked pass over generated answers |
+| `ykush3` | 40 | the bytes each command sends, reading answers, error paths, a swept and a hand-picked pass over generated answers |
 | `main` | 15 | output format, dispatch of every command, program name |
-| `error`, `help`, `device`, `sanitize` | 20 | error texts, help output, report padding, the Linux permission and driver diagnostics, the hidraw node from sysfs, the character filter |
+| `error`, `help`, `device`, `sanitize` | 23 | error texts, exit codes, help output, report padding, the Linux permission and driver diagnostics, the hidraw node from sysfs, the character filter |
 | `lock` | 12, on Linux 17 | two invocations hold the board one after the other, waiting runs out at the limit, `--no-wait` makes one attempt, a failed command lets go, a node that moves while it is locked is let go; on Linux the same against a real `flock` on a temporary file |
 | `tests/cli.rs` | 11 | the built binary: exit codes, stdout versus stderr |
 | `tests/encoding.rs` | 6 | every file is valid UTF-8 within Latin-1, and the rule itself |
 | doctest | 1 | the library example compiles; `no_run`, since it needs a board |
-| **running without hardware** | **139 + 1**, on Linux **144 + 1** | |
+| **running without hardware** | **143 + 1**, on Linux **148 + 1** | |
 | `--ignored`, needs a board | 9, on Linux 12 | opening and real exchanges, the acknowledged switch, the echoed pin and port, 2000 status reads on one handle, a second open of a held board refused as busy (expected to fail on macOS today, see above); on Linux the built binary against a lock held by another process, with and without `--no-wait` |
 | `--ignored`, needs only the HID stack | 2 | enumeration when nothing is attached |
 
@@ -510,6 +538,10 @@ without the flag cargo would stop before the binary's HID stack test has run. Th
 binary has to be the last object, otherwise `main()` is missing from the figures.
 
 ## Checked against the hardware
+
+The runs below predate the exit codes of 0.5.0: where they say "exits 1", today's program
+exits with the code from [Exit status](#exit-status), `69` for an unknown serial number and
+`75` for a held board.
 
 Against a YKUSH3 with serial number `Y3N13808`, firmware 1.5.0, bootloader 1.2.0, on macOS
 running on Apple silicon. Nothing was attached to the downstream ports.
@@ -626,7 +658,7 @@ What turned up beyond what the documentation says:
 | a stray first word (`ykushcmd foo -u 1`) | silently skipped | rejected with a message |
 | the external port | `4` for switching, `e` for configuring | both spellings everywhere |
 | I2C error status | only `0x00`/`0x01` told apart, otherwise a silent `0` | `0x02` and `0x03` are reported in words |
-| a command the board rejects | still exits with `0`, the answer is never read | the ACK is checked, exit `1` |
+| a command the board rejects | still exits with `0`, the answer is never read | the ACK is checked, exit `69`; an answer that does not fit, `76` |
 | an answer shorter than 64 bytes | missing bytes read as zeros | rejected as truncated |
 | a garbled version answer | reported as the legacy version `1.0.0` | an error instead of a guess |
 | a status answer for the wrong port or pin | taken at face value | rejected - the answer must match the request |
