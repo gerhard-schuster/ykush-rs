@@ -26,6 +26,10 @@ program:
   on Linux the udev rule decides who may open the hidraw node, and this program
   neither adds nor could add a check there
 - firmware behaviour of the board itself, which belongs to Yepkit
+- denial of service by a board that stops answering: every read gives up
+  after five seconds, and so does every write on macOS; on Linux the write
+  runs inside the kernel, whose USB timeout bounds it rather than this
+  program
 - denial of service by holding the device open; on Linux an invocation of
   this program waits at most five seconds for the lock described below and
   then gives up, and on macOS another program that seizes the device makes
@@ -68,6 +72,23 @@ Measured on 2026-11-02 on a Mac with a YKUSH3: two invocations reading at
 the same time failed in none of 5080 runs; before the exclusive open, on
 2026-10-11, they read each other's answers in about half the runs.
 
+## Known limitations
+
+- Boards are told apart by serial number. Two boards with the same serial
+  number, or both without one, are listed as one, and `-s` picks whichever
+  the system enumerates first. A board that copies the serial number of
+  another one therefore takes its place.
+- The protocol has no request ids, and the switching and configuration
+  commands answer with nothing beyond a status byte. The program gets back
+  in step by asking for the firmware version, dropping every report before
+  its answer and waiting 50 ms for the queue to stay quiet after it, since
+  that answer, or the empty report firmware before 1.1.0 gives instead,
+  may itself have been left behind. An answer that takes longer than that
+  to follow is read by the next command, and a switching command would
+  take it for its acknowledgement. How long the board takes is not
+  documented; in the soak runs in the README it answered each of 2000
+  reads within 4 ms.
+
 ## What has already been looked at
 
 [SECURITY-REVIEW-0.4.0.md](SECURITY-REVIEW-0.4.0.md) records the current review
@@ -76,4 +97,6 @@ surface, taken after the transport moved to `async-hid`.
 [SECURITY-REVIEW.md](SECURITY-REVIEW.md) is the earlier one, for the `hidapi`
 transport, and is kept as the record of that state. Note who wrote them: the
 author of the code, not an outside party. They are a record of what was
-examined, not an independent audit.
+examined, not an independent audit. The review of the sister project
+ykur-rs on 2026-11-02 found the same exchange in this program; the addendum
+of 2026-11-02 in SECURITY-REVIEW-0.4.0.md says what changed here.

@@ -9,7 +9,7 @@
 //! Sits behind the `fake` feature, precisely because of those panics: a build
 //! that does not ask for the test double gets a library without one.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 
 use crate::device::{report, Report, Transport};
@@ -18,6 +18,7 @@ use crate::error::{Error, Result};
 pub struct FakeBoard {
     sent: RefCell<Vec<Report>>,
     answers: RefCell<VecDeque<Result<Report>>>,
+    desyncs: Cell<usize>,
 }
 
 impl FakeBoard {
@@ -27,6 +28,7 @@ impl FakeBoard {
         FakeBoard {
             sent: RefCell::new(Vec::new()),
             answers: RefCell::new(VecDeque::new()),
+            desyncs: Cell::new(0),
         }
     }
 
@@ -60,6 +62,11 @@ impl FakeBoard {
     pub fn sent_count(&self) -> usize {
         self.sent.borrow().len()
     }
+
+    /// How often the protocol layer said the queue cannot be trusted.
+    pub fn desyncs(&self) -> usize {
+        self.desyncs.get()
+    }
 }
 
 impl Transport for FakeBoard {
@@ -75,5 +82,9 @@ impl Transport for FakeBoard {
     fn send(&self, out: &Report) -> Result<()> {
         self.sent.borrow_mut().push(*out);
         Ok(())
+    }
+
+    fn desync(&self) {
+        self.desyncs.set(self.desyncs.get() + 1);
     }
 }

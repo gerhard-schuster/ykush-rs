@@ -94,6 +94,18 @@ reached and who may open it.
 - An unknown option is named correctly when `-s` comes first: `-s A -x`
   used to report `-s` as the unknown option.
 
+- Before its first command, and after an exchange that failed or got an
+  answer that does not fit, the program asks for the firmware version,
+  drops every report before its answer and waits 50 ms for the queue to
+  stay quiet. An answer left behind by a killed
+  invocation is no longer read as the answer to the next one, which for a
+  switching command passed unnoticed, and a late answer that comes before
+  the answer to the version query is dropped, not only one within 50 ms.
+  `Transport` gains `desync()`, with a default that does nothing, and
+  `FakeBoard` counts the calls in `desyncs()`. On macOS writes give up after 5
+  seconds like reads. `sanitize()` lets only printable ASCII through, and
+  U+FFFD. Found by the security review of ykur-rs, which shares this code;
+  see the addendum in `SECURITY-REVIEW-0.4.0.md`.
 - `tests/encoding.rs` holds every file in the repository to valid UTF-8 within
   Latin-1: no character above U+00FF, and none of the Latin-1 characters that
   are invisible or steer a terminal. Umlauts are fine, typography is not. The

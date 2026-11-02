@@ -173,6 +173,16 @@ result.
 twice (a counter, a FIFO), and `--reset` and `--boot`. After 74 or 76 the
 board may have carried out the command before the answer was lost.
 
+The protocol has no way to tell which request an answer belongs to, and the switching and
+configuration commands answer with nothing beyond a status byte to check. So before its first
+command, and after any exchange that failed or got an answer that does not fit, `ykushctrl` asks
+for the firmware version and drops every report that arrives before that answer, then waits 50 ms
+for the queue to stay quiet, since the answer may itself have been left behind. Firmware before
+1.1.0 answers the version query with an empty report, which is handled the same way. An answer
+left behind by an invocation that was killed between asking and reading is not taken for the
+answer to this one. Every read gives up after 5 seconds, and so does every write on
+macOS; on Linux the write runs inside the kernel, whose USB timeout bounds it.
+
 sysexits(3) has no code for a device that refuses a command. A refusal is a valid answer, not
 a protocol violation (`76`), so it gets the catch-all `69`. `77` is meant for permissions
 above the file system; a denied device node is a file system matter, but its cause is the
@@ -206,8 +216,9 @@ The YKUSH3 Y3N13808 is not available: another ykushctrl is using it
 That is the message on Linux. On macOS the end reads `another program holds it exclusively`,
 see below.
 
-One invocation holds the board for a few milliseconds, so five seconds lets dozens of them
-queue up without any failing. A board taken for longer than that is held by something that
+In the runs on macOS below, one invocation held the board for less than a tenth of a second,
+most of it the 50 ms quiet after the version query, so five seconds lets dozens of them queue
+up without any failing. A board taken for longer than that is held by something that
 does not let go after one command - a program keeping a handle open, or one stuck in its own
 five second read timeout - and waiting longer would not help. `--no-wait` is for a script
 that would rather retry on its own terms.
@@ -471,8 +482,8 @@ command line application.
 ## Tests
 
 ```
-cargo test                                    # 143 tests and a doctest, no
-                                              # hardware needed (148 on Linux)
+cargo test                                    # 161 tests and a doctest, no
+                                              # hardware needed (166 on Linux)
 cargo test -- --ignored --test-threads=1      # 11 more: 9 need a board, 2 only
                                               # the HID stack of the system;
                                               # on Linux 3 more that need a board
@@ -582,6 +593,20 @@ the stricter checks require.
 | Power-on state | `-c`, verified across real resets | takes effect and persists |
 | I2C | master, slave, address, error paths | see below |
 | Exit codes | 0 on success, 1 on every error path | correct |
+
+On 2026-11-02, with the version query that gets an invocation in step, against the same
+board on macOS:
+
+| Run | Result |
+|---|---|
+| `cargo test -- --ignored --test-threads=1` | the 9 hardware tests and the 2 that need the HID stack pass |
+| `-g 1`, 20 times, release builds | median 11.0 ms before the change, 74.4 ms after it |
+| two loops of `-g 1` and `-g 2` in parallel, 200 each | none failed |
+| a status query for port 1 written by a separate program that exits without reading, then `-g 2`, 3 times | `Port 2: off`, exit 0, before the change and after it |
+
+The last row is the case the version query is for. On macOS the answer left behind did not
+reach the next invocation in these runs, so they show nothing there; on Linux it has not been
+tried.
 
 Not exercised: `--boot`. The board would stay in its bootloader and only the firmware update
 tool would get it back.

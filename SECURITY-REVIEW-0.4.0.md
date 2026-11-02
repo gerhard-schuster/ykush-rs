@@ -206,6 +206,42 @@ sidit77/async-hid#50 was merged and the branch rebased onto it; the tree did not
 the suite and drives a board, which is what the review found it could not do. The pin is
 itself temporary: it goes away when the fix is released on crates.io.
 
+## Addendum 2026-11-02 - from the review of ykur-rs
+
+ykur-rs, the program for Yepkit's YKUR relay board, shares this exchange. Its security review
+(`SECURITY-REVIEW-0.1.0.md` there) found four things that apply here as well, and closes the
+gap described above under "What remains".
+
+- **An answer left behind by an earlier invocation.** On Linux the kernel polls the board only
+  while the node is open, so an answer to a command whose invocation was killed between write
+  and read can wait in the board and reach the next invocation first. The command line program
+  here makes one exchange per run, which the review above took as safe; this way that exchange
+  is the one hit, and a switching command, which checks only the status byte, takes any answer
+  with an ACK in it for its own. Whether the board keeps such an answer is not measured.
+- **Getting back in step only after a timeout, and only within 50 ms.** A read error, a short
+  report or an answer that does not fit left the queue as it was.
+- **No timeout on the write.**
+- **`sanitize()` let other invisible and look-alike characters through**, such as tag
+  characters, U+2028, U+3164 and Cyrillic letters.
+
+What changed: a handle starts out of step, and every exchange that fails or gets an answer that
+does not fit puts it out of step again. Out of step, the next exchange first asks for the
+firmware version and drops every report before its answer, at most 16 and within five seconds
+plus the quiet described next.
+Since that answer, or the empty report firmware before 1.1.0 gives instead, may itself have been
+left behind, the queue then has to stay quiet for 50 ms; another report means the wait goes on.
+The stale flag and the 50 ms drain are gone. The write races a five second timer like the read,
+which bounds it on macOS; on Linux the transport's write runs inside the kernel and the kernel's
+USB timeout bounds it. `sanitize()` lets printable ASCII through and U+FFFD, nothing else. The
+exchange now has tests through a stand-in for the transport, which the drain above did not.
+Boards with the same serial number are still merged; SECURITY.md lists that as a known limitation.
+
+On 2026-11-02 the changed exchange ran against board `Y3N13808` on macOS: the hardware tests
+pass, two parallel loops of 200 invocations did not fail, and an invocation takes about 74 ms
+instead of 11 ms. An answer left behind by a program that exits without reading did not reach
+the next invocation on macOS, before the change or after it, so the case is not reproduced
+there. It has not been tried on Linux, where the review expects it.
+
 ## Scope
 
 A snapshot of the commit named above, with the dependency as the patch resolves it today.

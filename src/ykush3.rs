@@ -201,7 +201,7 @@ impl<T: Transport> Ykush3<T> {
         let state = resp[1];
         let number = state & 0x0f;
         if number != requested {
-            return Err(Error::Device(format!(
+            return Err(self.unfitting(format!(
                 "The answer describes port {number}, not port {requested} (0x{state:02x})"
             )));
         }
@@ -220,12 +220,12 @@ impl<T: Transport> Ykush3<T> {
     pub fn read_io(&self, gpio: u8) -> Result<u8> {
         let gpio = gpio_code(gpio)?;
         let resp = self.request(&[op::IO_READ, gpio])?;
-        expect_ack(&resp, op::IO_READ)?;
+        self.expect_ack(&resp, op::IO_READ)?;
 
         // The answer echoes the pin; a level belonging to a different pin
         // must not be reported as the one that was asked for.
         if resp[2] != gpio {
-            return Err(Error::Device(format!(
+            return Err(self.unfitting(format!(
                 "The answer refers to GPIO {}, not GPIO {gpio}",
                 resp[2]
             )));
@@ -302,7 +302,7 @@ impl<T: Transport> Ykush3<T> {
         req.extend_from_slice(data);
 
         let resp = self.request(&req)?;
-        expect_i2c_ack(&resp)
+        self.expect_i2c_ack(&resp)
     }
 
     /// Reads bytes from an I2C slave device.
@@ -317,7 +317,7 @@ impl<T: Transport> Ykush3<T> {
         }
 
         let resp = self.request(&[op::I2C_TRANSFER, 0x02, address, len])?;
-        expect_i2c_ack(&resp)?;
+        self.expect_i2c_ack(&resp)?;
 
         // The board reports how many bytes it actually got from the slave.
         // Fewer than requested is a legitimate short read; more would mean
@@ -325,7 +325,7 @@ impl<T: Transport> Ykush3<T> {
         // of being clamped into shape.
         let reported = usize::from(resp[2]);
         if reported > usize::from(len) {
-            return Err(Error::Device(format!(
+            return Err(self.unfitting(format!(
                 "The board reported {reported} bytes for a request of {len}"
             )));
         }
@@ -354,7 +354,7 @@ impl<T: Transport> Ykush3<T> {
         if resp.iter().all(|&b| b == 0) {
             return Ok(legacy);
         }
-        expect_ack(&resp, op::VERSION)?;
+        self.expect_ack(&resp, op::VERSION)?;
 
         Ok(Version {
             major: resp[2],
@@ -365,7 +365,7 @@ impl<T: Transport> Ykush3<T> {
 
     fn i2c_config(&self, selector: u8, value: u8) -> Result<()> {
         let resp = self.request(&[op::I2C_CONFIG, selector, value])?;
-        expect_ack(&resp, op::I2C_CONFIG)
+        self.expect_ack(&resp, op::I2C_CONFIG)
     }
 
     /// Sends a command and returns the answer.
@@ -392,7 +392,7 @@ impl<T: Transport> Ykush3<T> {
                 "The board rejected the command (answer 0x{:02x})",
                 resp[0]
             ))),
-            other => Err(Error::Device(format!(
+            other => Err(self.unfitting(format!(
                 "Unexpected answer to the command (status 0x{other:02x})"
             ))),
         }
@@ -401,6 +401,51 @@ impl<T: Transport> Ykush3<T> {
     /// Sends a command that the board does not answer.
     fn notify(&self, payload: &[u8]) -> Result<()> {
         self.transport.send(&report(payload))
+    }
+
+    /// An answer that does not fit its request was probably meant for an
+    /// earlier one, so the transport is told not to trust what it has queued.
+    fn unfitting(&self, message: String) -> Error {
+        self.transport.desync();
+        Error::Device(message)
+    }
+
+    fn expect_ack(&self, resp: &Report, opcode: u8) -> Result<()> {
+        match (resp[0], resp[1] == opcode) {
+            (op::ACK, true) => Ok(()),
+            (op::NAK, true) => Err(Error::Rejected(format!(
+                "The board rejected the command (answer 0x{:02x} 0x{:02x})",
+                resp[0], resp[1]
+            ))),
+            _ => Err(self.unfitting(format!(
+                "Unexpected answer to the command (0x{:02x} 0x{:02x})",
+                resp[0], resp[1]
+            ))),
+        }
+    }
+
+    /// Checks the answer to an I2C transfer, whose status byte carries a reason.
+    fn expect_i2c_ack(&self, resp: &Report) -> Result<()> {
+        if resp[1] != op::I2C_TRANSFER {
+            return Err(self.unfitting(format!(
+                "Unexpected answer to an I2C command (0x{:02x} 0x{:02x})",
+                resp[0], resp[1]
+            )));
+        }
+
+        match resp[0] {
+            op::ACK => Ok(()),
+            op::I2C_NOT_MASTER => Err(Error::Rejected(
+                "The board is not in I2C master mode, enable it with --i2c-master enable".into(),
+            )),
+            op::I2C_BUS_ERROR => Err(Error::Rejected("I2C transmission error".into())),
+            op::NAK => Err(Error::Rejected(
+                "The board rejected the I2C transfer".into(),
+            )),
+            status => Err(self.unfitting(format!(
+                "The board reported an unknown I2C status (0x{status:02x})"
+            ))),
+        }
     }
 }
 
@@ -416,44 +461,6 @@ fn gpio_code(gpio: u8) -> Result<u8> {
     Err(Error::Usage(format!(
         "There is no GPIO {gpio}, the board has 1 to 3"
     )))
-}
-
-fn expect_ack(resp: &Report, opcode: u8) -> Result<()> {
-    match (resp[0], resp[1] == opcode) {
-        (op::ACK, true) => Ok(()),
-        (op::NAK, true) => Err(Error::Rejected(format!(
-            "The board rejected the command (answer 0x{:02x} 0x{:02x})",
-            resp[0], resp[1]
-        ))),
-        _ => Err(Error::Device(format!(
-            "Unexpected answer to the command (0x{:02x} 0x{:02x})",
-            resp[0], resp[1]
-        ))),
-    }
-}
-
-/// Checks the answer to an I2C transfer, whose status byte carries a reason.
-fn expect_i2c_ack(resp: &Report) -> Result<()> {
-    if resp[1] != op::I2C_TRANSFER {
-        return Err(Error::Device(format!(
-            "Unexpected answer to an I2C command (0x{:02x} 0x{:02x})",
-            resp[0], resp[1]
-        )));
-    }
-
-    match resp[0] {
-        op::ACK => Ok(()),
-        op::I2C_NOT_MASTER => Err(Error::Rejected(
-            "The board is not in I2C master mode, enable it with --i2c-master enable".into(),
-        )),
-        op::I2C_BUS_ERROR => Err(Error::Rejected("I2C transmission error".into())),
-        op::NAK => Err(Error::Rejected(
-            "The board rejected the I2C transfer".into(),
-        )),
-        status => Err(Error::Device(format!(
-            "The board reported an unknown I2C status (0x{status:02x})"
-        ))),
-    }
 }
 
 #[cfg(test)]
@@ -554,6 +561,46 @@ mod tests {
         let (result, _) = exchange(&[0x01, 0x12], |b| b.port_status(Port::Downstream(1)), 1);
 
         assert!(matches!(result, Err(Error::Device(_))));
+    }
+
+    #[test]
+    fn every_answer_that_does_not_fit_puts_the_transport_out_of_step() {
+        type Command = fn(&Ykush3<FakeBoard>) -> Result<()>;
+        let cases: [(&str, &[u8], Command); 7] = [
+            ("status of another port", &[0x01, 0x12], |b| {
+                b.port_status(Port::Downstream(1)).map(drop)
+            }),
+            ("level of another pin", &[0x01, 0x30, 2, 1], |b| {
+                b.read_io(1).map(drop)
+            }),
+            ("garbled version", &[0x05, 0x61], |b| {
+                b.firmware_version().map(drop)
+            }),
+            ("unknown status", &[0x07], |b| {
+                b.port_up(Port::Downstream(1))
+            }),
+            ("I2C answer to another command", &[0x01, 0x99], |b| {
+                b.i2c_write(0x50, &[1])
+            }),
+            ("unknown I2C status", &[0x09, 0x52], |b| {
+                b.i2c_write(0x50, &[1])
+            }),
+            ("more I2C bytes than asked", &[0x01, 0x52, 5], |b| {
+                b.i2c_read(0x50, 2).map(drop)
+            }),
+        ];
+        for (what, answer, command) in cases {
+            let board = Ykush3::with_transport(FakeBoard::answering(answer));
+            assert!(matches!(command(&board), Err(Error::Device(_))), "{what}");
+            assert_eq!(board.transport.desyncs(), 1, "{what}");
+        }
+    }
+
+    #[test]
+    fn a_fitting_answer_leaves_the_transport_alone() {
+        let board = Ykush3::with_transport(FakeBoard::answering(&[0x01, 0x11]));
+        board.port_status(Port::Downstream(1)).unwrap();
+        assert_eq!(board.transport.desyncs(), 0);
     }
 
     #[test]

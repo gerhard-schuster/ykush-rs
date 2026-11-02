@@ -26,7 +26,7 @@ pub enum Error {
     /// HID library, which would otherwise become part of this library's public
     /// interface and tie it to that library's major version.
     Hid(String),
-    /// The board did not answer within the read timeout.
+    /// The board did not take a report, or did not answer one, in time.
     NoResponse,
     /// The board could not be taken because another invocation had it, and
     /// it did not come free in time. On macOS the system reports the board as

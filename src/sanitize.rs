@@ -1,47 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Keeps text that enters the program from carrying terminal escapes.
 
-/// Replaces characters that steer a terminal in a string from outside the
-/// program.
+/// Replaces every character outside printable ASCII with `?`.
 ///
 /// A serial number is whatever the USB descriptor says, argv is whatever the
 /// caller put there, and both end up on the terminal. Without this, a device
 /// or a calling script could hide an ANSI escape sequence in the text and
-/// control what the terminal does with the rest of the line, or reorder what
-/// the line appears to say.
+/// control what the terminal does with the rest of the line, reorder what the
+/// line appears to say with bidirectional overrides, or make two different
+/// serial numbers look alike with invisible or look-alike characters. Unicode
+/// has too many of those to list; a serial number of a Yepkit board is ASCII,
+/// so nothing else is let through.
+///
+/// The one exception is U+FFFD, which a lossy argv conversion puts where a
+/// byte was not UTF-8: it prints as a visible mark, so an error message still
+/// shows where the bad byte was.
 pub fn sanitize(text: &str) -> String {
     text.chars()
-        .map(|c| {
-            if c.is_control() || steers_layout(c) {
-                '?'
-            } else {
-                c
-            }
+        .map(|c| match c {
+            ' '..='~' | '\u{fffd}' => c,
+            _ => '?',
         })
         .collect()
-}
-
-/// Characters outside the control category that still decide how a terminal
-/// lays text out.
-///
-/// `char::is_control` is the Unicode `Cc` category, which covers the C0 and C1
-/// escapes and stops there. The bidirectional overrides below are `Cf`: they
-/// emit nothing themselves, and they make the rest of the line display in an
-/// order it was not written in - enough for a serial number to be shown as one
-/// that belongs to a different board. The zero width characters are here for
-/// the same reason in the other direction: they let two different strings look
-/// identical. A serial number has a use for none of them.
-fn steers_layout(c: char) -> bool {
-    matches!(
-        c,
-        '\u{00ad}'                 // soft hyphen
-            | '\u{061c}'           // arabic letter mark
-            | '\u{200b}'..='\u{200f}' // zero width space through right-to-left mark
-            | '\u{202a}'..='\u{202e}' // bidi embeddings and overrides
-            | '\u{2060}'..='\u{2064}' // word joiner and the invisible operators
-            | '\u{2066}'..='\u{2069}' // bidi isolates
-            | '\u{feff}'           // byte order mark
-    )
 }
 
 #[cfg(test)]
@@ -80,6 +60,29 @@ mod tests {
         assert_eq!(sanitize("Y3N\u{feff}13808"), "Y3N?13808");
         assert_eq!(sanitize("Y3N\u{00ad}13808"), "Y3N?13808");
         assert_eq!(sanitize("Y3N\u{2060}13808"), "Y3N?13808");
+    }
+
+    #[test]
+    fn nothing_outside_printable_ascii_gets_through() {
+        // Tag characters, line and paragraph separators, invisible fillers,
+        // combining marks and look-alike letters: none of them belongs in a
+        // serial number, and listing them one by one never ends.
+        for c in [
+            '\u{e0041}',
+            '\u{2028}',
+            '\u{2029}',
+            '\u{180e}',
+            '\u{fff9}',
+            '\u{3164}',
+            '\u{034f}',
+            '\u{0336}',
+            '\u{0417}',
+            '\u{00e4}',
+            '\u{00a0}',
+        ] {
+            assert_eq!(sanitize(&format!("Y{c}K")), "Y?K", "U+{:04X}", c as u32);
+        }
+        assert_eq!(sanitize(" !~"), " !~");
     }
 
     #[test]
