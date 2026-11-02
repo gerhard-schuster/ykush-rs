@@ -68,8 +68,8 @@ reached and who may open it.
 - `Board::open_within()` and `Ykush3::open_within()` take the time to wait,
   `DEFAULT_WAIT` is the five seconds `open()` waits, and `Error::Busy` is
   what both return when the time is up.
-- The lock serializes `ykushctrl` instances only. Another tool on the same
-  board, Yepkit's `ykushcmd` among them, is not held back; README and
+- On Linux, the lock serializes `ykushctrl` instances only. Another tool on
+  the same board, Yepkit's `ykushcmd` among them, is not held back; README and
   `SECURITY.md` say so and recommend one YKUSH3 tool per host.
 - A hardware test that reads port states 2000 times over one held handle,
   read-only; `YKUSH3_SOAK_COUNT` changes the number.

@@ -39,18 +39,19 @@ program:
 
 ## Concurrent use
 
-Invocations of `ykushctrl` take turns at a board through an advisory
-`flock` on its `/dev/hidrawN`. Advisory means it only orders the programs
-that ask for it: the instances of `ykushctrl` and programs built on its
-library. It is not access control and does not try to be one.
+On Linux, invocations of `ykushctrl` take turns at a board through an
+advisory `flock` on its `/dev/hidrawN`. Advisory means it only orders the
+programs that ask for it: the instances of `ykushctrl` and programs built on
+its library. It is not access control and does not try to be one.
 
-Nothing protects a run of Yepkit's `ykushcmd`, or of any other HID tool,
-against the same board in parallel. A build of such a tool that uses hidraw
-opens the node beside this program, and answers can be read by the wrong
-process. A build that uses libusb detaches the kernel's HID driver, and the
-board disappears from under this program. Any local user the udev rule lets
-open the node can also take the lock and hold it, which makes this program
-wait and then fail; that is the denial of service above, with a limit.
+On Linux, nothing protects a run of Yepkit's `ykushcmd`, or of any other
+HID tool, against the same board in parallel. A build of such a tool that
+uses hidraw opens the node beside this program, and answers can be read by
+the wrong process. A build that uses libusb detaches the kernel's HID
+driver, and the board disappears from under this program. Any local user
+the udev rule lets open the node can also take the lock and hold it, which
+makes this program wait and then fail; that is the denial of service above,
+with a limit.
 
 The rule that follows: **one YKUSH3 tool per host**.
 

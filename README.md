@@ -203,6 +203,9 @@ $ ykushctrl --no-wait -g 1
 The YKUSH3 Y3N13808 is not available: another ykushctrl is using it
 ```
 
+That is the message on Linux. On macOS the end reads `another program holds it exclusively`,
+see below.
+
 One invocation holds the board for a few milliseconds, so five seconds lets dozens of them
 queue up without any failing. A board taken for longer than that is held by something that
 does not let go after one command - a program keeping a handle open, or one stuck in its own
@@ -225,8 +228,9 @@ How the turn is held differs:
   the board open loses its writes while the seize lasts.
 
   What the transport does under a seize was measured in sidit77/async-hid#55 (2026-10-11,
-  YKUSH3 on Apple silicon). With this program, measured on 2026-11-02 on a Mac (Apple silicon) with board `Y3N13808`,
-  release builds of the commit before the exclusive open and of the exclusive open:
+  YKUSH3 on Apple silicon). With this program, measured on 2026-11-02 on a Mac (Apple
+  silicon) with board `Y3N13808`, release builds of the commit before the exclusive open and
+  of the exclusive open:
 
   | Run | Shared open (before) | Exclusive open |
   |---|---|---|
