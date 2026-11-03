@@ -19,6 +19,9 @@
 //!   process and in any other. A refused open is repeated until it goes
 //!   through. The handle is the turn, and closing it - on drop, or when the
 //!   process ends - ends the turn.
+//! - **FreeBSD** lets one handle open a hidraw node at a time, so the handle
+//!   is the turn there too. A held board is missing from the device list,
+//!   and `sysctl` tells it apart from one that is not attached.
 //!
 //! On Linux the lock is advisory. It orders the programs that ask for it -
 //! every instance of `ykushctrl`, and any program built on this library -
@@ -46,6 +49,11 @@ pub const DEFAULT_WAIT: Duration = Duration::from_secs(5);
 /// macOS. The system does not say by whom.
 #[cfg(target_os = "macos")]
 pub(crate) const HELD_EXCLUSIVELY: &str = "another program holds it exclusively";
+
+/// What the user is told when another program has the board open, on
+/// FreeBSD, where hidraw takes one open at a time.
+#[cfg(target_os = "freebsd")]
+pub(crate) const HELD_OPEN: &str = "another program has it open";
 
 /// Pause between two attempts. Short against the time one invocation holds
 /// the board, long enough that a waiting process does not spin.

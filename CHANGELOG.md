@@ -6,10 +6,12 @@ Notable changes, newest first. The format follows
 
 ## Unreleased
 
-Linux on 64 bit Arm joins macOS on Apple silicon as a supported system, built
-and run against a board on a Raspberry Pi 4 under Debian 13. The protocol and
-the report exchange are the same on both; what differs is how the device is
-reached and who may open it.
+Linux and FreeBSD on 64 bit Arm join macOS on Apple silicon as supported
+systems, Linux run against a board on a Raspberry Pi 4 under Debian 13, FreeBSD
+15.1 in a VM. The protocol and the report exchange are the same on all three;
+what differs is how the device is reached and who may open it. On FreeBSD the
+open itself is the turn, since hidraw allows one at a time, and a board another
+program has open is found through `sysctl`.
 
 ### Changed
 

@@ -43,20 +43,20 @@ resolves the dependencies afresh instead of taking the versions pinned in `Cargo
 the ones the tests and the dependency audit actually ran against. `--tag` picks a release;
 up to v0.4.1 the program was called `ykush3cmd` and the repository `ykush3cmd`.
 
-**For macOS on Apple silicon and for Linux on aarch64.** Those are the two systems it has
-been built on and run against a board - Linux on a Raspberry Pi 4 under Debian 13 - and the
-source refuses to compile anywhere else rather than produce a binary nobody has tried. Linux
-on x86_64 is left out for that reason alone: nothing in the code depends on the processor,
-but no board has been driven from such a machine yet.
+**For macOS on Apple silicon and for Linux and FreeBSD on aarch64.** Those are the systems it
+has been built on and run against a board - Linux on a Raspberry Pi 4 under Debian 13, FreeBSD
+15.1 in a VM - and the source refuses to compile anywhere else rather than produce a binary
+nobody has tried. x86_64 is left out for that reason alone: nothing in the code depends on the
+processor, but no board has been driven from such a machine yet.
 
 The HID access goes through the `async-hid` crate, which reaches IOKit on macOS and the
-kernel's hidraw interface on Linux, both from Rust. No C is compiled and no library travels
+kernel's hidraw interface on Linux and FreeBSD, all from Rust. No C is compiled and no library travels
 alongside the binary, so a Rust toolchain is the whole requirement - no C compiler, no Xcode
 command line tools, and on Linux neither `libudev` nor `pkg-config`: the devices are found
 by reading `/sys`.
 
 On macOS, reaching the device needs no special permission - the system hands it to any
-process that asks. On Linux it takes a udev rule, see below. See
+process that asks. On Linux it takes a udev rule, on FreeBSD a devfs rule, see below. See
 [SECURITY-REVIEW-0.4.0.md](SECURITY-REVIEW-0.4.0.md) for what that means, and
 [SECURITY-REVIEW.md](SECURITY-REVIEW.md) for the earlier review of the `hidapi` transport.
 
@@ -108,6 +108,27 @@ Three things to know on Linux, the last one applies on macOS in part (see
   the wrong process. A build that goes through libusb detaches the kernel's HID driver,
   and the board disappears from under this program, see the point above. **Use one YKUSH3
   tool per host.**
+
+### FreeBSD
+
+The board is `/dev/hidrawN` here too. It needs the `hidraw` module and the newer USB HID
+driver, and a devfs rule that hands the nodes to a group, here `operator` (the rule covers
+every hidraw node, devfs can not tell boards apart):
+
+```
+# /boot/loader.conf
+hidraw_load="YES"
+hw.usb.usbhid.enable="1"
+
+# /etc/devfs.rules, then devfs_system_ruleset="hidraw" in /etc/rc.conf
+[hidraw=10]
+add path 'hidraw*' mode 0660 group operator
+```
+
+hidraw lets one program open a node at a time, so that open is the turn: a second invocation
+waits for it, see [Concurrent invocations](#concurrent-invocations). A board another program
+has open is missing from the device list; `ykushctrl` finds it through `sysctl` and waits for
+it, and `-l` lists it.
 
 ## Using it
 
@@ -214,7 +235,7 @@ The YKUSH3 Y3N13808 is not available: another ykushctrl is using it
 ```
 
 That is the message on Linux. On macOS the end reads `another program holds it exclusively`,
-see below.
+on FreeBSD `another program has it open`.
 
 In the runs on macOS below, one invocation held the board for less than a tenth of a second,
 most of it the 50 ms quiet after the version query, so five seconds lets dozens of them queue
@@ -230,6 +251,8 @@ How the turn is held differs:
   finds the board. The kernel releases the lock when the process ends, however it ends. The
   lock orders the instances of this program, and programs built on its library, among
   themselves - nothing else asks for it, see [Linux](#linux).
+- **FreeBSD**: the open itself, since hidraw allows one at a time. That holds back every
+  program that opens the node, see [FreeBSD](#freebsd).
 - **macOS**: the board is opened exclusively (seized, `Access::Exclusive` of the transport,
   from sidit77/async-hid#55, pinned until it is released). While one handle holds the board,
   every other open fails, in this process and in any other, and is repeated until the time is
@@ -482,8 +505,8 @@ command line application.
 ## Tests
 
 ```
-cargo test                                    # 161 tests and a doctest, no
-                                              # hardware needed (166 on Linux)
+cargo test                                    # 162 tests and a doctest, no
+                                              # hardware needed (167 on Linux)
 cargo test -- --ignored --test-threads=1      # 11 more: 9 need a board, 2 only
                                               # the HID stack of the system;
                                               # on Linux 3 more that need a board
@@ -686,6 +709,14 @@ What turned up beyond what the documentation says:
   fully, only the SuperSpeed hub appears; the USB 2.0 hub and the controller are missing and
   the board cannot be reached even though the power LED is lit. Check the plug before
   swapping the cable.
+
+### On FreeBSD
+
+The same board on 2026-11-03, from FreeBSD 15.1 (aarch64) in a VMware Fusion VM on a Mac: the
+9 hardware tests and the 2 that need only the HID stack pass; two loops reading ports 1 and 2
+in parallel, 300 each, did not fail; with the board held by another process, `--no-wait`
+exits `75`, a waiting call goes through once it is free, and `-l` still lists the board;
+without access to the node, a call exits `77` at once.
 
 ## Where it differs from the C++ original
 

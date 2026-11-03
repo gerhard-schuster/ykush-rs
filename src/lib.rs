@@ -23,14 +23,15 @@
 //! prepared queue and records what would have been sent. The feature is off
 //! by default, so the plain library carries no test gear.
 
-// This library is built and run against a board on two systems: macOS on
-// Apple silicon, and Linux on 64 bit Arm (a Raspberry Pi 4 under Debian).
-// Anywhere else it refuses to compile rather than produce a binary nobody has
-// tried. Nothing in the code is tied to the processor; Linux on x86_64 stays
-// out only because no board has been driven from it, and taking it in is this
-// line plus a hardware run.
-#[cfg(not(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux"))))]
-compile_error!("ykush is for macOS on Apple silicon and for Linux on aarch64");
+// Built and run against a board on macOS on Apple silicon and on Linux and
+// FreeBSD on aarch64; anywhere else it refuses to compile rather than produce
+// a binary nobody has tried. x86_64 stays out only because no board has been
+// driven from it.
+#[cfg(not(all(
+    target_arch = "aarch64",
+    any(target_os = "macos", target_os = "linux", target_os = "freebsd")
+)))]
+compile_error!("ykush is for macOS on Apple silicon and for Linux and FreeBSD on aarch64");
 
 mod device;
 mod error;
