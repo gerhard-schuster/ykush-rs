@@ -1,7 +1,7 @@
 # ykush-rs
 
 An independent Rust implementation of the YKUSH3 control protocol, **for macOS on Apple
-silicon and for Linux on 64 bit Arm**. YKUSH3 only (VID `0x04D8`, PID `0xF11B`) - YKUSH,
+silicon and for Linux and FreeBSD on 64 bit Arm**. YKUSH3 only (VID `0x04D8`, PID `0xF11B`) - YKUSH,
 YKUSH2 and YKUSHXS are not covered.
 
 It was written against Yepkit's published protocol documentation, not derived from the
@@ -524,14 +524,14 @@ into the five second limit.
 | Group | Tests | Subject |
 |---|---|---|
 | `cli` | 36 | grammar, board selection, `--no-wait`, every command, every error message |
-| `ykush3` | 40 | the bytes each command sends, reading answers, error paths, a swept and a hand-picked pass over generated answers |
+| `ykush3` | 42 | the bytes each command sends, reading answers, error paths, a swept and a hand-picked pass over generated answers |
 | `main` | 15 | output format, dispatch of every command, program name |
-| `error`, `help`, `device`, `sanitize` | 23 | error texts, exit codes, help output, report padding, the Linux permission and driver diagnostics, the hidraw node from sysfs, the character filter |
-| `lock` | 12, on Linux 17 | two invocations hold the board one after the other, waiting runs out at the limit, `--no-wait` makes one attempt, a failed command lets go, a node that moves while it is locked is let go; on Linux the same against a real `flock` on a temporary file |
+| `error`, `help`, `device`, `sanitize` | 40 | error texts, exit codes, help output, report padding, the Linux permission and driver diagnostics, the hidraw node from sysfs, the character filter |
+| `lock` | 16, on Linux 21 | two invocations hold the board one after the other, waiting runs out at the limit, `--no-wait` makes one attempt, a failed command lets go, a board gone for a moment is waited for, a node that moves while it is locked is let go; on Linux the same against a real `flock` on a temporary file |
 | `tests/cli.rs` | 11 | the built binary: exit codes, stdout versus stderr |
 | `tests/encoding.rs` | 6 | every file is valid UTF-8 within Latin-1, and the rule itself |
 | doctest | 1 | the library example compiles; `no_run`, since it needs a board |
-| **running without hardware** | **143 + 1**, on Linux **148 + 1** | |
+| **running without hardware** | **166 + 1**, on Linux **171 + 1** | |
 | `--ignored`, needs a board | 9, on Linux 12 | opening and real exchanges, the acknowledged switch, the echoed pin and port, 2000 status reads on one handle, a second open of a held board refused as busy; on Linux the built binary against a lock held by another process, with and without `--no-wait` |
 | `--ignored`, needs only the HID stack | 2 | enumeration when nothing is attached |
 

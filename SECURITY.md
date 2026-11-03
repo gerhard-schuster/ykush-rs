@@ -71,7 +71,8 @@ denial of service above.
 On FreeBSD hidraw lets one program open a node at a time, so the open is
 the turn and holds back every program that opens the node; a program that
 keeps it open makes this one wait and then fail, as above. While waiting,
-the device list is read every 10 ms, which opens every hidraw node briefly.
+the board's own node is opened every 10 ms once it is known; the other
+nodes are opened only to find it.
 
 Measured on 2026-11-02 on a Mac with a YKUSH3: two invocations reading at
 the same time failed in none of 5080 runs; before the exclusive open, on

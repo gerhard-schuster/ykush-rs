@@ -131,7 +131,7 @@ impl From<async_hid::HidError> for Error {
     /// that a retry would cure.
     fn from(e: async_hid::HidError) -> Self {
         match e {
-            async_hid::HidError::NotConnected => {
+            async_hid::HidError::NotConnected | async_hid::HidError::Disconnected => {
                 Error::Unavailable("The YKUSH3 is no longer connected".into())
             }
             e => Error::Hid(e.to_string()),
@@ -150,9 +150,14 @@ mod tests {
 
     #[test]
     fn a_board_that_is_gone_is_unavailable_not_an_io_error() {
-        let error = Error::from(async_hid::HidError::NotConnected);
-        assert!(matches!(error, Error::Unavailable(_)), "{error:?}");
-        assert_eq!(error.exit_code(), 69);
+        for gone in [
+            async_hid::HidError::NotConnected,
+            async_hid::HidError::Disconnected,
+        ] {
+            let error = Error::from(gone);
+            assert!(matches!(error, Error::Unavailable(_)), "{error:?}");
+            assert_eq!(error.exit_code(), 69);
+        }
         assert!(matches!(
             Error::from(async_hid::HidError::message("x")),
             Error::Hid(_)

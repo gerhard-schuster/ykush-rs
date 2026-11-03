@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Command line front end for the Yepkit YKUSH3 switchable USB hub.
 //!
-//! The board handling itself lives in the `ykush3` library target of this
+//! The board handling itself lives in the `ykush` library target of this
 //! package; what remains here is parsing the command line and printing.
 
 mod cli;

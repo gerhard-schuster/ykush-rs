@@ -66,6 +66,10 @@ pub(crate) enum Attempt<T> {
     /// Someone else has the board; a later attempt may succeed. Carries what
     /// to tell the user if waiting runs out.
     Busy(String),
+    /// The board is gone for now, e.g. re-enumerating after a reset; it may
+    /// come back. Carries the error to report if waiting runs out.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    Gone(Error),
     /// Failed for a reason that waiting does not cure.
     Failed(Error),
 }
@@ -82,21 +86,21 @@ pub(crate) fn wait_for<T>(
     let start = Instant::now();
 
     loop {
-        match attempt() {
+        let unless_in_time = match attempt() {
             Attempt::Got(held) => return Ok(held),
             Attempt::Failed(error) => return Err(error),
-            Attempt::Busy(cause) => {
-                let waited = start.elapsed();
-                if waited >= wait {
-                    return Err(Error::Busy {
-                        serial: serial.to_owned(),
-                        waited: wait,
-                        cause,
-                    });
-                }
-                std::thread::sleep(POLL.min(wait - waited));
-            }
+            Attempt::Busy(cause) => Error::Busy {
+                serial: serial.to_owned(),
+                waited: wait,
+                cause,
+            },
+            Attempt::Gone(error) => error,
+        };
+        let waited = start.elapsed();
+        if waited >= wait {
+            return Err(unless_in_time);
         }
+        std::thread::sleep(POLL.min(wait - waited));
     }
 }
 
@@ -486,6 +490,60 @@ mod tests {
 
         assert!(matches!(result, Err(Error::NotFound { .. })));
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_board_that_comes_back_is_waited_for() {
+        let attempts = AtomicUsize::new(0);
+
+        let result = wait_for("Y3TEST", DEFAULT_WAIT, || {
+            match attempts.fetch_add(1, Ordering::SeqCst) {
+                0..=2 => Attempt::Gone(Error::NotFound { serial: None }),
+                _ => Attempt::Got(()),
+            }
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(attempts.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn a_board_that_stays_gone_is_reported_as_gone() {
+        let start = Instant::now();
+
+        let result: Result<()> = wait_for("Y3TEST", Duration::from_millis(100), || {
+            Attempt::Gone(Error::NotFound { serial: None })
+        });
+
+        assert!(start.elapsed() >= Duration::from_millis(100));
+        assert!(matches!(result, Err(Error::NotFound { .. })), "{result:?}");
+    }
+
+    #[test]
+    fn without_waiting_a_gone_board_fails_after_one_attempt() {
+        let attempts = AtomicUsize::new(0);
+
+        let result: Result<()> = wait_for("Y3TEST", Duration::ZERO, || {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Attempt::Gone(Error::NotFound { serial: None })
+        });
+
+        assert!(matches!(result, Err(Error::NotFound { .. })));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn the_last_attempt_decides_what_is_reported() {
+        let attempts = AtomicUsize::new(0);
+
+        let result: Result<()> = wait_for("Y3TEST", Duration::from_millis(50), || {
+            match attempts.fetch_add(1, Ordering::SeqCst) {
+                0 => Attempt::Gone(Error::NotFound { serial: None }),
+                _ => Attempt::Busy("held by the test".to_owned()),
+            }
+        });
+
+        assert!(matches!(result, Err(Error::Busy { .. })), "{result:?}");
     }
 
     #[test]

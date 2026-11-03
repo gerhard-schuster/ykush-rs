@@ -36,6 +36,22 @@ program has open is found through `sysctl`.
   `ykush` (was `ykush3cmd` and `ykush3`), and the repository `ykush-rs`. The
   board it supports is still the YKUSH3 only. The udev rule file is
   `60-ykush.rules`.
+- A board unplugged after it was opened ends with `69` like one that is
+  not there, instead of `74`, which asked for a retry. Not yet on Linux:
+  with the pinned transport revision the unplug comes as `ENODEV`, measured
+  with a board unplugged through sysfs, and still ends with `74`.
+- A waiting invocation keeps waiting while the board comes back from a reset
+  by the program that held it, on macOS and FreeBSD; before, it gave up with
+  "not found" as soon as the board was gone. Measured on a Mac: 10 of 10
+  waiting invocations got the board, after 2.8 s; before, 5 of 5 gave up
+  after 1.2 s. On FreeBSD measured in a VM only, with a 15 s wait, since
+  the board takes about 5 s to come back there.
+- FreeBSD: without `-s`, the first board by device node is taken even while
+  another program has it open, and `-l` lists the boards in that order;
+  before, a held first board made the command take the next one. While
+  the board is held, only its own node is opened again, so other programs
+  no longer fail to open their own devices with `EBUSY` meanwhile; while it
+  is gone after a reset, all nodes are still opened to find it.
 
 ### Added
 
