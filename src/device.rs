@@ -27,7 +27,7 @@ use async_hid::{AsyncHidRead, AsyncHidWrite, Device, DeviceReaderWriter, HidBack
 use futures_lite::{future, StreamExt};
 
 use crate::error::{Error, Result};
-use crate::lock::DEFAULT_WAIT;
+use crate::lock::{Attempt, DEFAULT_WAIT};
 use crate::sanitize::sanitize;
 
 /// Microchip vendor id used by all Yepkit boards.
@@ -143,37 +143,15 @@ impl Board {
         // crate::lock.
         #[cfg(target_os = "macos")]
         let dev = {
-            use crate::lock::Attempt;
-
             let (found, device) = future::block_on(choose(serial))?;
-            // None while the board re-enumerates, e.g. reset by the holder.
-            let mut device = Some(device);
-            // Once it was held elsewhere, the holder may have reset it.
-            let mut may_reset = false;
+            let mut seize = Seize::new(device, crate::lock::HELD_EXCLUSIVELY);
             crate::lock::wait_for(&found, wait, || {
-                let current = match device.take() {
-                    Some(current) => current,
-                    None => match future::block_on(choose(Some(&found))) {
-                        Ok((_, again)) => again,
-                        Err(error @ Error::NotFound { .. }) => return Attempt::Gone(error),
-                        Err(error) => return Attempt::Failed(error),
+                seize.attempt(
+                    || future::block_on(choose(Some(&found))).map(|(_, again)| again),
+                    |device| {
+                        future::block_on(device.open_options().access(Access::Exclusive).open())
                     },
-                };
-                match future::block_on(current.open_options().access(Access::Exclusive).open()) {
-                    Ok(dev) => Attempt::Got(dev),
-                    Err(error) if refused_as_busy(&error) => {
-                        device = Some(current);
-                        may_reset = true;
-                        Attempt::Busy(crate::lock::HELD_EXCLUSIVELY.to_owned())
-                    }
-                    // IOKit names a vanished or returning board in several ways.
-                    Err(error)
-                        if may_reset || matches!(error, async_hid::HidError::NotConnected) =>
-                    {
-                        Attempt::Gone(open_failed(error))
-                    }
-                    Err(error) => Attempt::Failed(open_failed(error)),
-                }
+                )
             })?
         };
 
@@ -182,7 +160,7 @@ impl Board {
         // from the list rather than refused.
         #[cfg(target_os = "freebsd")]
         let dev = {
-            use crate::lock::{Attempt, HELD_OPEN};
+            use crate::lock::HELD_OPEN;
 
             // Without a serial number, the first board by node, held or not.
             let first = serial
@@ -192,48 +170,15 @@ impl Board {
                 .map(|(found, _)| found);
             let serial = serial.or(first.as_deref());
 
-            let open = |device: Device| match future::block_on(device.open()) {
-                Ok(dev) => Attempt::Got(dev),
-                Err(error) if refused_as_busy(&error) => Attempt::Busy(HELD_OPEN.to_owned()),
-                Err(error @ async_hid::HidError::NotConnected) => Attempt::Gone(error.into()),
-                Err(error) => Attempt::Failed(open_failed(error)),
-            };
-            // Once the board is missing from the list, only its node is tried.
-            let mut held: Option<(String, std::path::PathBuf)> = None;
-            // Once it was gone, e.g. reset by the holder, it may be coming back.
-            let mut gone = false;
+            let mut node_wait = NodeWait::default();
             crate::lock::wait_for(serial.unwrap_or_default(), wait, || {
-                let outcome = 'attempt: {
-                    let (found, node) = match held.take() {
-                        Some(board) => board,
-                        None => match future::block_on(choose(serial)) {
-                            Ok((_, device)) => break 'attempt open(device),
-                            Err(error @ Error::NotFound { .. }) => match held_board(serial) {
-                                Some(board) => board,
-                                None if gone => break 'attempt Attempt::Gone(error),
-                                None => break 'attempt Attempt::Failed(error),
-                            },
-                            Err(error) => break 'attempt Attempt::Failed(error),
-                        },
-                    };
-                    let device = future::block_on(node_device(&node, &found));
-                    held = Some((found, node));
-                    match device {
-                        Ok(device) => open(device),
-                        Err(error) if refused_as_busy(&error) => {
-                            Attempt::Busy(HELD_OPEN.to_owned())
-                        }
-                        Err(error @ async_hid::HidError::NotConnected) => {
-                            Attempt::Gone(error.into())
-                        }
-                        Err(error) => Attempt::Failed(open_failed(error)),
-                    }
-                };
-                if let Attempt::Gone(_) = outcome {
-                    gone = true;
-                    held = None;
-                }
-                outcome
+                node_wait.attempt(
+                    || future::block_on(choose(serial)).map(|(_, device)| device),
+                    || held_board(serial),
+                    |node, found| future::block_on(node_device(node, found)),
+                    |device: Device| future::block_on(device.open()),
+                    HELD_OPEN,
+                )
             })
             .map_err(|error| match error {
                 Error::Busy { waited, cause, .. } => Error::Busy {
@@ -374,7 +319,8 @@ fn resync(link: &mut impl Link) -> Result<()> {
     )))
 }
 
-/// Serial numbers of all attached YKUSH3 boards, in enumeration order.
+/// Serial numbers of all attached YKUSH3 boards, in enumeration order; on
+/// FreeBSD sorted by the path of their device nodes.
 pub fn list() -> Result<Vec<String>> {
     let attached = future::block_on(attached_boards())?
         .into_iter()
@@ -407,6 +353,107 @@ YKUSH3. Allow access with a devfs.rules entry as shown in the README and make th
 user a member of the group it names";
 #[cfg(target_os = "macos")]
 pub(crate) const PERMISSION_DENIED: &str = "Permission denied on the YKUSH3";
+
+/// Waiting for a board opened exclusively, on macOS, kept between attempts.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+struct Seize<D> {
+    /// None while the board re-enumerates, e.g. reset by the holder.
+    device: Option<D>,
+    /// Once it was held elsewhere, the holder may have reset it.
+    may_reset: bool,
+    busy: &'static str,
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+impl<D> Seize<D> {
+    fn new(device: D, busy: &'static str) -> Self {
+        Seize {
+            device: Some(device),
+            may_reset: false,
+            busy,
+        }
+    }
+
+    fn attempt<T>(
+        &mut self,
+        choose: impl FnOnce() -> Result<D>,
+        open: impl FnOnce(&D) -> async_hid::HidResult<T>,
+    ) -> Attempt<T> {
+        let current = match self.device.take() {
+            Some(current) => current,
+            None => match choose() {
+                Ok(again) => again,
+                Err(error @ Error::NotFound { .. }) => return Attempt::Gone(error),
+                Err(error) => return Attempt::Failed(error),
+            },
+        };
+        match open(&current) {
+            Ok(dev) => Attempt::Got(dev),
+            Err(error) if refused_as_busy(&error) => {
+                self.device = Some(current);
+                self.may_reset = true;
+                Attempt::Busy(self.busy.to_owned())
+            }
+            // IOKit names a vanished or returning board in several ways.
+            Err(error) if self.may_reset || matches!(error, async_hid::HidError::NotConnected) => {
+                Attempt::Gone(open_failed(error))
+            }
+            Err(error) => Attempt::Failed(open_failed(error)),
+        }
+    }
+}
+
+/// Waiting for a board on FreeBSD, where hidraw takes one open at a time,
+/// kept between attempts.
+#[derive(Default)]
+#[cfg_attr(not(target_os = "freebsd"), allow(dead_code))]
+struct NodeWait {
+    /// Once the board is missing from the list, only its node is tried.
+    held: Option<(String, std::path::PathBuf)>,
+    /// Once it was gone, e.g. reset by the holder, it may be coming back.
+    gone: bool,
+}
+
+#[cfg_attr(not(target_os = "freebsd"), allow(dead_code))]
+impl NodeWait {
+    fn attempt<D, T>(
+        &mut self,
+        choose: impl FnOnce() -> Result<D>,
+        held_board: impl FnOnce() -> Option<(String, std::path::PathBuf)>,
+        node_device: impl FnOnce(&std::path::Path, &str) -> async_hid::HidResult<D>,
+        open: impl FnOnce(D) -> async_hid::HidResult<T>,
+        busy: &str,
+    ) -> Attempt<T> {
+        let opened = |result: async_hid::HidResult<T>| match result {
+            Ok(dev) => Attempt::Got(dev),
+            Err(error) if refused_as_busy(&error) => Attempt::Busy(busy.to_owned()),
+            Err(error @ async_hid::HidError::NotConnected) => Attempt::Gone(error.into()),
+            Err(error) => Attempt::Failed(open_failed(error)),
+        };
+        let outcome = 'attempt: {
+            let (found, node) = match self.held.take() {
+                Some(board) => board,
+                None => match choose() {
+                    Ok(device) => break 'attempt opened(open(device)),
+                    Err(error @ Error::NotFound { .. }) => match held_board() {
+                        Some(board) => board,
+                        None if self.gone => break 'attempt Attempt::Gone(error),
+                        None => break 'attempt Attempt::Failed(error),
+                    },
+                    Err(error) => break 'attempt Attempt::Failed(error),
+                },
+            };
+            let device = node_device(&node, &found);
+            self.held = Some((found, node));
+            opened(device.and_then(open))
+        };
+        if let Attempt::Gone(_) = outcome {
+            self.gone = true;
+            self.held = None;
+        }
+        outcome
+    }
+}
 
 /// Turns a refused open into an error that says what to do about it.
 ///
@@ -1374,5 +1421,168 @@ mod tests {
 
             assert!(matches!(result, Err(Error::NotFound { serial: Some(_) })));
         }
+    }
+}
+
+#[cfg(test)]
+mod waiting_tests {
+    use std::cell::Cell;
+    use std::path::{Path, PathBuf};
+
+    use async_hid::HidError;
+
+    use super::{NodeWait, Seize};
+    use crate::error::Error;
+    use crate::lock::Attempt;
+
+    fn not_found() -> crate::error::Result<&'static str> {
+        Err(Error::NotFound { serial: None })
+    }
+
+    fn unused<R>() -> R {
+        panic!("not expected in this attempt")
+    }
+
+    fn outcome<T>(attempt: Attempt<T>) -> &'static str {
+        match attempt {
+            Attempt::Got(_) => "got",
+            Attempt::Busy(_) => "busy",
+            Attempt::Gone(_) => "gone",
+            Attempt::Failed(_) => "failed",
+        }
+    }
+
+    // -- macOS: the seized handle ------------------------------------------
+
+    #[test]
+    fn an_open_failure_before_the_board_was_busy_fails_at_once() {
+        let mut seize = Seize::new("old", "held");
+
+        let attempt = seize.attempt(unused, |_| Err::<(), _>(HidError::message("x")));
+
+        assert_eq!(outcome(attempt), "failed");
+    }
+
+    #[test]
+    fn a_board_reset_while_held_elsewhere_is_found_again() {
+        let mut seize = Seize::new("old", "held");
+        let opened = Cell::new(None);
+
+        let busy = seize.attempt(unused, |_| Err::<(), _>(HidError::Busy));
+        let vanished = seize.attempt(unused, |_| Err::<(), _>(HidError::message("gone")));
+        let missing = seize.attempt(not_found, |_| unused());
+        let back = seize.attempt(
+            || Ok("new"),
+            |device| {
+                opened.set(Some(*device));
+                Ok(())
+            },
+        );
+
+        let seen = [busy, vanished, missing, back].map(outcome);
+        assert_eq!(seen, ["busy", "gone", "gone", "got"]);
+        assert_eq!(opened.get(), Some("new"));
+    }
+
+    #[test]
+    fn a_board_gone_at_the_first_open_is_looked_for_again() {
+        let mut seize = Seize::new("old", "held");
+
+        let gone = seize.attempt(unused, |_| Err::<(), _>(HidError::NotConnected));
+        let back = seize.attempt(|| Ok("new"), |_| Ok(()));
+
+        assert_eq!([gone, back].map(outcome), ["gone", "got"]);
+    }
+
+    // -- FreeBSD: one open per node -----------------------------------------
+
+    fn board() -> Option<(String, PathBuf)> {
+        Some(("YK1".to_owned(), PathBuf::from("/dev/hidraw3")))
+    }
+
+    #[test]
+    fn a_board_neither_listed_nor_in_sysctl_is_not_found_at_once() {
+        let mut wait = NodeWait::default();
+
+        let attempt = wait.attempt(
+            not_found,
+            || None,
+            |_, _| unused(),
+            |_| unused::<Result<(), _>>(),
+            "held",
+        );
+
+        assert!(matches!(attempt, Attempt::Failed(Error::NotFound { .. })));
+    }
+
+    #[test]
+    fn a_held_board_is_asked_for_by_its_node_only() {
+        let mut wait = NodeWait::default();
+        let asked = Cell::new(0);
+        let node = |path: &Path, serial: &str| {
+            assert_eq!((path, serial), (Path::new("/dev/hidraw3"), "YK1"));
+            asked.set(asked.get() + 1);
+            Err::<&str, _>(HidError::Busy)
+        };
+
+        let first = wait.attempt(
+            not_found,
+            board,
+            node,
+            |_| unused::<Result<(), _>>(),
+            "held",
+        );
+        let second = wait.attempt(unused, unused, node, |_| unused::<Result<(), _>>(), "held");
+
+        assert_eq!([first, second].map(outcome), ["busy", "busy"]);
+        assert_eq!(asked.get(), 2);
+    }
+
+    #[test]
+    fn a_board_that_left_its_node_is_waited_for_until_it_is_back() {
+        let mut wait = NodeWait::default();
+
+        let held = wait.attempt(
+            not_found,
+            board,
+            |_, _| Err::<&str, _>(HidError::Busy),
+            |_| unused::<Result<(), _>>(),
+            "held",
+        );
+        let left = wait.attempt(
+            unused,
+            unused,
+            |_, _| Err::<&str, _>(HidError::NotConnected),
+            |_| unused::<Result<(), _>>(),
+            "held",
+        );
+        let missing = wait.attempt(
+            not_found,
+            || None,
+            |_, _| unused(),
+            |_| unused::<Result<(), _>>(),
+            "held",
+        );
+        let back = wait.attempt(|| Ok("new"), unused, |_, _| unused(), |_| Ok(()), "held");
+
+        assert_eq!(
+            [held, left, missing, back].map(outcome),
+            ["busy", "gone", "gone", "got"]
+        );
+    }
+
+    #[test]
+    fn a_listed_board_that_is_gone_at_the_open_is_waited_for() {
+        let mut wait = NodeWait::default();
+
+        let attempt = wait.attempt(
+            || Ok("old"),
+            unused,
+            |_, _| unused(),
+            |_| Err::<(), _>(HidError::NotConnected),
+            "held",
+        );
+
+        assert_eq!(outcome(attempt), "gone");
     }
 }

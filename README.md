@@ -505,8 +505,8 @@ command line application.
 ## Tests
 
 ```
-cargo test                                    # 162 tests and a doctest, no
-                                              # hardware needed (167 on Linux)
+cargo test                                    # 173 tests and a doctest, no
+                                              # hardware needed (178 on Linux)
 cargo test -- --ignored --test-threads=1      # 11 more: 9 need a board, 2 only
                                               # the HID stack of the system;
                                               # on Linux 3 more that need a board
@@ -526,12 +526,12 @@ into the five second limit.
 | `cli` | 36 | grammar, board selection, `--no-wait`, every command, every error message |
 | `ykush3` | 42 | the bytes each command sends, reading answers, error paths, a swept and a hand-picked pass over generated answers |
 | `main` | 15 | output format, dispatch of every command, program name |
-| `error`, `help`, `device`, `sanitize` | 40 | error texts, exit codes, help output, report padding, the Linux permission and driver diagnostics, the hidraw node from sysfs, the character filter |
+| `error`, `help`, `device`, `sanitize` | 47 | error texts, exit codes, help output, report padding, waiting for a busy or re-enumerating board on macOS and FreeBSD against fakes, the Linux permission and driver diagnostics, the hidraw node from sysfs, the character filter |
 | `lock` | 16, on Linux 21 | two invocations hold the board one after the other, waiting runs out at the limit, `--no-wait` makes one attempt, a failed command lets go, a board gone for a moment is waited for, a node that moves while it is locked is let go; on Linux the same against a real `flock` on a temporary file |
 | `tests/cli.rs` | 11 | the built binary: exit codes, stdout versus stderr |
 | `tests/encoding.rs` | 6 | every file is valid UTF-8 within Latin-1, and the rule itself |
 | doctest | 1 | the library example compiles; `no_run`, since it needs a board |
-| **running without hardware** | **166 + 1**, on Linux **171 + 1** | |
+| **running without hardware** | **173 + 1**, on Linux **178 + 1** | |
 | `--ignored`, needs a board | 9, on Linux 12 | opening and real exchanges, the acknowledged switch, the echoed pin and port, 2000 status reads on one handle, a second open of a held board refused as busy; on Linux the built binary against a lock held by another process, with and without `--no-wait` |
 | `--ignored`, needs only the HID stack | 2 | enumeration when nothing is attached |
 
