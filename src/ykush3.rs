@@ -15,8 +15,12 @@ pub const I2C_MAX_BYTES: usize = 60;
 /// A switchable power port of the board.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Port {
-    /// Downstream USB port 1 to 3.
-    Downstream(u8),
+    /// Downstream USB port 1.
+    Downstream1,
+    /// Downstream USB port 2.
+    Downstream2,
+    /// Downstream USB port 3.
+    Downstream3,
     /// The external 5V output port.
     External,
     /// All downstream ports at once.
@@ -24,20 +28,28 @@ pub enum Port {
 }
 
 impl Port {
+    /// The three downstream USB ports, in number order.
+    pub const DOWNSTREAM: [Port; 3] = [Port::Downstream1, Port::Downstream2, Port::Downstream3];
+
     /// Port number as used in the low nibble of the port opcodes.
-    ///
-    /// A number outside 1 to 3 is rejected rather than masked: unchecked it
-    /// would bleed into the opcode - 0x42 would turn a switching command into
-    /// BOOTLOADER - and masked it would silently address a different port.
-    /// The command line never produces such a value, but a library caller can.
-    fn code(self) -> Result<u8> {
+    fn code(self) -> u8 {
         match self {
-            Port::Downstream(n) if (1..=3).contains(&n) => Ok(n),
-            Port::Downstream(n) => Err(Error::Usage(format!(
-                "There is no downstream port {n}, the board has 1 to 3"
-            ))),
-            Port::External => Ok(0x4),
-            Port::All => Ok(0xa),
+            Port::Downstream1 => 1,
+            Port::Downstream2 => 2,
+            Port::Downstream3 => 3,
+            Port::External => 0x4,
+            Port::All => 0xa,
+        }
+    }
+
+    /// The individual ports this value covers (`1` to `3` for [`Port::All`]).
+    pub fn ports(self) -> &'static [Port] {
+        match self {
+            Port::Downstream1 => &[Port::Downstream1],
+            Port::Downstream2 => &[Port::Downstream2],
+            Port::Downstream3 => &[Port::Downstream3],
+            Port::External => &[Port::External],
+            Port::All => &Self::DOWNSTREAM,
         }
     }
 }
@@ -45,9 +57,42 @@ impl Port {
 impl fmt::Display for Port {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Port::Downstream(n) => write!(f, "Port {n}"),
+            Port::Downstream1 => write!(f, "Port 1"),
+            Port::Downstream2 => write!(f, "Port 2"),
+            Port::Downstream3 => write!(f, "Port 3"),
             Port::External => write!(f, "External 5V port"),
             Port::All => write!(f, "All ports"),
+        }
+    }
+}
+
+/// One of the three user-accessible GPIO pins of the board.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Gpio {
+    /// GPIO pin 1.
+    Gpio1,
+    /// GPIO pin 2.
+    Gpio2,
+    /// GPIO pin 3.
+    Gpio3,
+}
+
+impl Gpio {
+    fn code(self) -> u8 {
+        match self {
+            Gpio::Gpio1 => 1,
+            Gpio::Gpio2 => 2,
+            Gpio::Gpio3 => 3,
+        }
+    }
+}
+
+impl fmt::Display for Gpio {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Gpio::Gpio1 => write!(f, "GPIO 1"),
+            Gpio::Gpio2 => write!(f, "GPIO 2"),
+            Gpio::Gpio3 => write!(f, "GPIO 3"),
         }
     }
 }
@@ -173,13 +218,13 @@ impl<T: Transport> Ykush3<T> {
 
     /// Powers a port up.
     pub fn port_up(&self, port: Port) -> Result<()> {
-        self.request_acked(&[op::PORT_UP | port.code()?])?;
+        self.request_acked(&[op::PORT_UP | port.code()])?;
         Ok(())
     }
 
     /// Powers a port down.
     pub fn port_down(&self, port: Port) -> Result<()> {
-        self.request_acked(&[op::PORT_DOWN | port.code()?])?;
+        self.request_acked(&[op::PORT_DOWN | port.code()])?;
         Ok(())
     }
 
@@ -191,7 +236,7 @@ impl<T: Transport> Ykush3<T> {
             ));
         }
 
-        let requested = port.code()?;
+        let requested = port.code();
         let resp = self.request_acked(&[op::PORT_STATUS | requested])?;
 
         // The answer carries the port number in the low nibble and the
@@ -217,25 +262,24 @@ impl<T: Transport> Ykush3<T> {
     /// The level is returned as the raw byte the board reports. The firmware
     /// has only ever been seen to send 0 or 1, but that is an observation,
     /// not a documented guarantee, so nothing is rejected here.
-    pub fn read_io(&self, gpio: u8) -> Result<u8> {
-        let gpio = gpio_code(gpio)?;
-        let resp = self.request(&[op::IO_READ, gpio])?;
+    pub fn read_io(&self, gpio: Gpio) -> Result<u8> {
+        let pin = gpio.code();
+        let resp = self.request(&[op::IO_READ, pin])?;
         self.expect_ack(&resp, op::IO_READ)?;
 
         // The answer echoes the pin; a level belonging to a different pin
         // must not be reported as the one that was asked for.
-        if resp[2] != gpio {
-            return Err(self.unfitting(format!(
-                "The answer refers to GPIO {}, not GPIO {gpio}",
-                resp[2]
-            )));
+        if resp[2] != pin {
+            return Err(
+                self.unfitting(format!("The answer refers to GPIO {}, not {gpio}", resp[2]))
+            );
         }
         Ok(resp[3])
     }
 
     /// Drives a GPIO pin high or low.
-    pub fn write_io(&self, gpio: u8, high: bool) -> Result<()> {
-        self.request_acked(&[op::IO_WRITE, gpio_code(gpio)?, u8::from(high)])?;
+    pub fn write_io(&self, gpio: Gpio, high: bool) -> Result<()> {
+        self.request_acked(&[op::IO_WRITE, gpio.code(), u8::from(high)])?;
         Ok(())
     }
 
@@ -254,7 +298,7 @@ impl<T: Transport> Ykush3<T> {
             ));
         }
 
-        self.request_acked(&[op::PORT_CONFIG, port.code()?, state.code()])?;
+        self.request_acked(&[op::PORT_CONFIG, port.code(), state.code()])?;
         Ok(())
     }
 
@@ -449,20 +493,6 @@ impl<T: Transport> Ykush3<T> {
     }
 }
 
-/// GPIO pin number as sent on the wire, `1` to `3`.
-///
-/// Validated here and not only in the command line, because the library can
-/// be called with any `u8` - and an unchecked pin number would go straight
-/// into a report.
-fn gpio_code(gpio: u8) -> Result<u8> {
-    if (1..=3).contains(&gpio) {
-        return Ok(gpio);
-    }
-    Err(Error::Usage(format!(
-        "There is no GPIO {gpio}, the board has 1 to 3"
-    )))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,9 +526,9 @@ mod tests {
     #[test]
     fn port_up_sends_the_opcodes_of_the_cpp_application() {
         for (port, opcode) in [
-            (Port::Downstream(1), 0x11),
-            (Port::Downstream(2), 0x12),
-            (Port::Downstream(3), 0x13),
+            (Port::Downstream1, 0x11),
+            (Port::Downstream2, 0x12),
+            (Port::Downstream3, 0x13),
             (Port::External, 0x14),
             (Port::All, 0x1a),
         ] {
@@ -512,9 +542,9 @@ mod tests {
     #[test]
     fn port_down_sends_the_opcodes_of_the_cpp_application() {
         for (port, opcode) in [
-            (Port::Downstream(1), 0x01),
-            (Port::Downstream(2), 0x02),
-            (Port::Downstream(3), 0x03),
+            (Port::Downstream1, 0x01),
+            (Port::Downstream2, 0x02),
+            (Port::Downstream3, 0x03),
             (Port::External, 0x04),
             (Port::All, 0x0a),
         ] {
@@ -528,8 +558,8 @@ mod tests {
     #[test]
     fn port_status_asks_for_the_requested_port() {
         for (port, opcode) in [
-            (Port::Downstream(1), 0x21),
-            (Port::Downstream(3), 0x23),
+            (Port::Downstream1, 0x21),
+            (Port::Downstream3, 0x23),
             (Port::External, 0x24),
         ] {
             let (_, sent) = exchange(&[0x01, 0x11], |b| b.port_status(port), 1);
@@ -541,9 +571,9 @@ mod tests {
     #[test]
     fn port_status_decodes_the_state_nibble() {
         for (answer, port, expected) in [
-            (0x11, Port::Downstream(1), PortStatus { port: 1, on: true }),
-            (0x02, Port::Downstream(2), PortStatus { port: 2, on: false }),
-            (0x13, Port::Downstream(3), PortStatus { port: 3, on: true }),
+            (0x11, Port::Downstream1, PortStatus { port: 1, on: true }),
+            (0x02, Port::Downstream2, PortStatus { port: 2, on: false }),
+            (0x13, Port::Downstream3, PortStatus { port: 3, on: true }),
             // The C++ application does not decode the external port at all.
             (0x14, Port::External, PortStatus { port: 4, on: true }),
             (0x04, Port::External, PortStatus { port: 4, on: false }),
@@ -558,7 +588,7 @@ mod tests {
     fn port_status_rejects_the_answer_for_a_different_port() {
         // Port 2 answers although port 1 was asked. Decoded as-is, a caller
         // would take the state of the wrong physical port for the truth.
-        let (result, _) = exchange(&[0x01, 0x12], |b| b.port_status(Port::Downstream(1)), 1);
+        let (result, _) = exchange(&[0x01, 0x12], |b| b.port_status(Port::Downstream1), 1);
 
         assert!(matches!(result, Err(Error::Device(_))));
     }
@@ -568,17 +598,15 @@ mod tests {
         type Command = fn(&Ykush3<FakeBoard>) -> Result<()>;
         let cases: [(&str, &[u8], Command); 7] = [
             ("status of another port", &[0x01, 0x12], |b| {
-                b.port_status(Port::Downstream(1)).map(drop)
+                b.port_status(Port::Downstream1).map(drop)
             }),
             ("level of another pin", &[0x01, 0x30, 2, 1], |b| {
-                b.read_io(1).map(drop)
+                b.read_io(Gpio::Gpio1).map(drop)
             }),
             ("garbled version", &[0x05, 0x61], |b| {
                 b.firmware_version().map(drop)
             }),
-            ("unknown status", &[0x07], |b| {
-                b.port_up(Port::Downstream(1))
-            }),
+            ("unknown status", &[0x07], |b| b.port_up(Port::Downstream1)),
             ("I2C answer to another command", &[0x01, 0x99], |b| {
                 b.i2c_write(0x50, &[1])
             }),
@@ -599,13 +627,13 @@ mod tests {
     #[test]
     fn a_fitting_answer_leaves_the_transport_alone() {
         let board = Ykush3::with_transport(FakeBoard::answering(&[0x01, 0x11]));
-        board.port_status(Port::Downstream(1)).unwrap();
+        board.port_status(Port::Downstream1).unwrap();
         assert_eq!(board.transport.desyncs(), 0);
     }
 
     #[test]
     fn port_status_rejects_an_unexpected_answer() {
-        let (result, _) = exchange(&[0x01, 0x55], |b| b.port_status(Port::Downstream(1)), 1);
+        let (result, _) = exchange(&[0x01, 0x55], |b| b.port_status(Port::Downstream1), 1);
 
         assert!(matches!(result, Err(Error::Device(_))));
     }
@@ -617,7 +645,7 @@ mod tests {
         let rejected: Vec<(&str, Result<()>)> = vec![
             (
                 "port_up",
-                exchange(&[0x00], |b| b.port_up(Port::Downstream(1)), 1).0,
+                exchange(&[0x00], |b| b.port_up(Port::Downstream1), 1).0,
             ),
             (
                 "port_down",
@@ -627,12 +655,15 @@ mod tests {
                 "config_port",
                 exchange(
                     &[0x00],
-                    |b| b.config_port(Port::Downstream(2), PowerOnState::On),
+                    |b| b.config_port(Port::Downstream2, PowerOnState::On),
                     3,
                 )
                 .0,
             ),
-            ("write_io", exchange(&[0x00], |b| b.write_io(1, true), 3).0),
+            (
+                "write_io",
+                exchange(&[0x00], |b| b.write_io(Gpio::Gpio1, true), 3).0,
+            ),
             (
                 "gpio_control",
                 exchange(&[0x00], |b| b.gpio_control(true), 2).0,
@@ -645,38 +676,18 @@ mod tests {
     }
 
     #[test]
-    fn an_out_of_range_port_number_is_rejected_before_anything_is_sent() {
-        // The command line cannot produce these; a library caller can. Masked
-        // or passed through, 18 would address port 2 and 0x45 would reset the
-        // board.
-        let board = Ykush3::with_transport(FakeBoard::mute());
-
-        for n in [0, 4, 18, 0x45] {
-            assert!(
-                matches!(board.port_up(Port::Downstream(n)), Err(Error::Usage(_))),
-                "port_up({n})"
-            );
-            assert!(
-                matches!(board.port_status(Port::Downstream(n)), Err(Error::Usage(_))),
-                "port_status({n})"
-            );
-        }
-        assert_eq!(board.transport.sent_count(), 0, "nothing must be sent");
-    }
-
-    #[test]
     fn a_port_status_the_board_does_not_acknowledge_is_an_error() {
         // 0x11 in the second byte would decode as "port 1 on" - without the
         // status byte check the rejection would read as a valid state.
-        let (result, _) = exchange(&[0x00, 0x11], |b| b.port_status(Port::Downstream(1)), 1);
+        let (result, _) = exchange(&[0x00, 0x11], |b| b.port_status(Port::Downstream1), 1);
 
         assert!(matches!(result, Err(Error::Rejected(_))));
     }
 
     #[test]
     fn a_gpio_read_answered_with_the_wrong_opcode_is_an_error() {
-        let (no_ack, _) = exchange(&[0x00, 0x30, 0x02, 0x01], |b| b.read_io(2), 2);
-        let (wrong_echo, _) = exchange(&[0x01, 0x41, 0x02, 0x01], |b| b.read_io(2), 2);
+        let (no_ack, _) = exchange(&[0x00, 0x30, 0x02, 0x01], |b| b.read_io(Gpio::Gpio2), 2);
+        let (wrong_echo, _) = exchange(&[0x01, 0x41, 0x02, 0x01], |b| b.read_io(Gpio::Gpio2), 2);
 
         assert!(matches!(no_ack, Err(Error::Rejected(_))));
         assert!(matches!(wrong_echo, Err(Error::Device(_))));
@@ -685,35 +696,31 @@ mod tests {
     #[test]
     fn a_gpio_read_answered_for_a_different_pin_is_an_error() {
         // The answer carries the level of pin 3 although pin 2 was asked.
-        let (result, _) = exchange(&[0x01, 0x30, 0x03, 0x01], |b| b.read_io(2), 2);
+        let (result, _) = exchange(&[0x01, 0x30, 0x03, 0x01], |b| b.read_io(Gpio::Gpio2), 2);
 
         assert!(matches!(result, Err(Error::Device(_))));
     }
 
     #[test]
-    fn an_out_of_range_gpio_number_is_rejected_before_anything_is_sent() {
-        // The command line only offers 1 to 3; a library caller can pass
-        // anything and must be stopped before it reaches a report.
-        let board = Ykush3::with_transport(FakeBoard::mute());
-
-        for gpio in [0, 4, 255] {
-            assert!(
-                matches!(board.read_io(gpio), Err(Error::Usage(_))),
-                "read_io({gpio})"
-            );
-            assert!(
-                matches!(board.write_io(gpio, true), Err(Error::Usage(_))),
-                "write_io({gpio})"
-            );
-        }
-        assert_eq!(board.transport.sent_count(), 0, "nothing must be sent");
-    }
-
-    #[test]
-    fn ports_have_a_readable_name() {
-        assert_eq!(Port::Downstream(2).to_string(), "Port 2");
+    fn ports_and_gpios_have_a_readable_name_and_port_expansion() {
+        assert_eq!(Port::Downstream1.to_string(), "Port 1");
+        assert_eq!(Port::Downstream2.to_string(), "Port 2");
+        assert_eq!(Port::Downstream3.to_string(), "Port 3");
         assert_eq!(Port::External.to_string(), "External 5V port");
         assert_eq!(Port::All.to_string(), "All ports");
+
+        assert_eq!(Port::Downstream1.ports(), &[Port::Downstream1]);
+        assert_eq!(Port::Downstream2.ports(), &[Port::Downstream2]);
+        assert_eq!(Port::Downstream3.ports(), &[Port::Downstream3]);
+        assert_eq!(Port::External.ports(), &[Port::External]);
+        assert_eq!(
+            Port::All.ports(),
+            &[Port::Downstream1, Port::Downstream2, Port::Downstream3]
+        );
+
+        assert_eq!(Gpio::Gpio1.to_string(), "GPIO 1");
+        assert_eq!(Gpio::Gpio2.to_string(), "GPIO 2");
+        assert_eq!(Gpio::Gpio3.to_string(), "GPIO 3");
     }
 
     #[test]
@@ -730,7 +737,7 @@ mod tests {
 
     #[test]
     fn read_io_returns_the_pin_level_from_the_answer() {
-        let (result, sent) = exchange(&[0x01, 0x30, 0x02, 0x01], |b| b.read_io(2), 2);
+        let (result, sent) = exchange(&[0x01, 0x30, 0x02, 0x01], |b| b.read_io(Gpio::Gpio2), 2);
 
         assert_eq!(sent, vec![0x30, 0x02]);
         assert_eq!(result.unwrap(), 1);
@@ -738,8 +745,8 @@ mod tests {
 
     #[test]
     fn write_io_encodes_the_level() {
-        let (_, high) = exchange(&[0x01], |b| b.write_io(3, true), 3);
-        let (_, low) = exchange(&[0x01], |b| b.write_io(3, false), 3);
+        let (_, high) = exchange(&[0x01], |b| b.write_io(Gpio::Gpio3, true), 3);
+        let (_, low) = exchange(&[0x01], |b| b.write_io(Gpio::Gpio3, false), 3);
 
         assert_eq!(high, vec![0x31, 0x03, 0x01]);
         assert_eq!(low, vec![0x31, 0x03, 0x00]);
@@ -759,13 +766,9 @@ mod tests {
     #[test]
     fn config_port_encodes_port_and_power_on_state() {
         for (port, state, expected) in [
-            (Port::Downstream(1), PowerOnState::Off, [0x41, 0x01, 0x00]),
-            (Port::Downstream(2), PowerOnState::On, [0x41, 0x02, 0x01]),
-            (
-                Port::Downstream(3),
-                PowerOnState::Persist,
-                [0x41, 0x03, 0x02],
-            ),
+            (Port::Downstream1, PowerOnState::Off, [0x41, 0x01, 0x00]),
+            (Port::Downstream2, PowerOnState::On, [0x41, 0x02, 0x01]),
+            (Port::Downstream3, PowerOnState::Persist, [0x41, 0x03, 0x02]),
             (Port::External, PowerOnState::On, [0x41, 0x04, 0x01]),
         ] {
             let (result, sent) = exchange(&[0x01], |b| b.config_port(port, state), 3);
@@ -928,10 +931,10 @@ mod tests {
         // that is not an ACK is an answer that does not fit the request,
         // typically one meant for another exchange. A caller retries the
         // second, not the first.
-        let (said_no, _) = exchange(&[0x00], |b| b.port_up(Port::Downstream(1)), 1);
-        let (garbled, _) = exchange(&[0x5a], |b| b.port_up(Port::Downstream(1)), 1);
-        let (said_no_ack, _) = exchange(&[0x00, 0x30, 0x02, 0x01], |b| b.read_io(2), 2);
-        let (garbled_ack, _) = exchange(&[0x5a, 0x30, 0x02, 0x01], |b| b.read_io(2), 2);
+        let (said_no, _) = exchange(&[0x00], |b| b.port_up(Port::Downstream1), 1);
+        let (garbled, _) = exchange(&[0x5a], |b| b.port_up(Port::Downstream1), 1);
+        let (said_no_ack, _) = exchange(&[0x00, 0x30, 0x02, 0x01], |b| b.read_io(Gpio::Gpio2), 2);
+        let (garbled_ack, _) = exchange(&[0x5a, 0x30, 0x02, 0x01], |b| b.read_io(Gpio::Gpio2), 2);
         let (not_master, _) = exchange(&[0x02, 0x52], |b| b.i2c_write(0x20, &[0x01]), 5);
         let (bus_error, _) = exchange(&[0x03, 0x52], |b| b.i2c_read(0x20, 2), 4);
         let (unknown_i2c, _) = exchange(&[0x7f, 0x52], |b| b.i2c_read(0x20, 2), 4);
@@ -996,7 +999,7 @@ mod tests {
     fn a_transport_error_reaches_the_caller() {
         let board = Ykush3::with_transport(FakeBoard::failing(Error::NoResponse));
 
-        let result = board.port_up(Port::Downstream(1));
+        let result = board.port_up(Port::Downstream1);
 
         assert!(matches!(result, Err(Error::NoResponse)));
     }
@@ -1064,7 +1067,7 @@ mod tests {
             // A port status must describe the port that was asked about.
             let answer = generated_answer(&mut state, &report(&[0x01, 0x12]));
             let board = Ykush3::with_transport(FakeBoard::answering(&answer));
-            if let Ok(status) = board.port_status(Port::Downstream(2)) {
+            if let Ok(status) = board.port_status(Port::Downstream2) {
                 let ctx = swept(round, &answer);
                 assert_eq!(answer[0], 0x01, "no acknowledgement - {ctx}");
                 assert_eq!(answer[1] & 0x0f, 2, "answer for another port - {ctx}");
@@ -1075,7 +1078,7 @@ mod tests {
             // A GPIO read must carry the level of the pin that was asked for.
             let answer = generated_answer(&mut state, &report(&[0x01, 0x30, 0x03, 0x01]));
             let board = Ykush3::with_transport(FakeBoard::answering(&answer));
-            if let Ok(level) = board.read_io(3) {
+            if let Ok(level) = board.read_io(Gpio::Gpio3) {
                 let ctx = swept(round, &answer);
                 assert_eq!(answer[0], 0x01, "no acknowledgement - {ctx}");
                 assert_eq!(answer[1], 0x30, "answer to another command - {ctx}");
@@ -1086,7 +1089,7 @@ mod tests {
             // A switching command may only pass on an acknowledgement.
             let answer = generated_answer(&mut state, &report(&[0x01]));
             let board = Ykush3::with_transport(FakeBoard::answering(&answer));
-            if board.port_up(Port::Downstream(1)).is_ok() {
+            if board.port_up(Port::Downstream1).is_ok() {
                 assert_eq!(
                     answer[0],
                     0x01,
@@ -1164,17 +1167,15 @@ mod tests {
         // A device that simply holds every line high.
         let all_high: Report = [0xff; REPORT_SIZE];
         assert!(
-            answering(&all_high)
-                .port_status(Port::Downstream(1))
-                .is_err(),
+            answering(&all_high).port_status(Port::Downstream1).is_err(),
             "all 0xff, port status"
         );
         assert!(
-            answering(&all_high).read_io(1).is_err(),
+            answering(&all_high).read_io(Gpio::Gpio1).is_err(),
             "all 0xff, gpio read"
         );
         assert!(
-            answering(&all_high).port_up(Port::Downstream(1)).is_err(),
+            answering(&all_high).port_up(Port::Downstream1).is_err(),
             "all 0xff, switching"
         );
         assert!(
@@ -1190,7 +1191,7 @@ mod tests {
         for nibble in [0x00, 0x0f] {
             let answer = report(&[0x01, nibble]);
             assert!(
-                answering(&answer).port_status(Port::Downstream(1)).is_err(),
+                answering(&answer).port_status(Port::Downstream1).is_err(),
                 "port nibble 0x{nibble:02x}"
             );
         }
@@ -1199,7 +1200,7 @@ mod tests {
         for pin in [0x00, 0xff] {
             let answer = report(&[0x01, 0x30, pin, 0x01]);
             assert!(
-                answering(&answer).read_io(1).is_err(),
+                answering(&answer).read_io(Gpio::Gpio1).is_err(),
                 "echoed pin 0x{pin:02x}"
             );
         }
@@ -1253,7 +1254,9 @@ mod tests {
         fn a_gpio_read_is_answered_for_the_requested_pin() {
             let board = Ykush3::open(None).expect("the first board should open");
 
-            board.read_io(1).expect("the answer should name pin 1");
+            board
+                .read_io(Gpio::Gpio1)
+                .expect("the answer should name pin 1");
         }
 
         /// Checks that the status of the external port really comes back with
@@ -1274,7 +1277,7 @@ mod tests {
         #[ignore = "needs a YKUSH3 attached"]
         fn a_switching_command_is_acknowledged_by_the_board() {
             let board = Ykush3::open(None).expect("the first board should open");
-            let port = Port::Downstream(1);
+            let port = Port::Downstream1;
 
             let status = board
                 .port_status(port)

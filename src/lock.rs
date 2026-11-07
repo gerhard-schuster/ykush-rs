@@ -339,7 +339,7 @@ mod tests {
                     let from = Instant::now();
                     // Long enough that an overlap could not hide.
                     thread::sleep(Duration::from_millis(100));
-                    let status = board.port_status(Port::Downstream(1)).unwrap();
+                    let status = board.port_status(Port::Downstream1).unwrap();
                     let to = Instant::now();
                     drop(board);
                     spans.lock().unwrap().push((from, to));
@@ -369,7 +369,7 @@ mod tests {
                 board: FakeBoard::failing(Error::NoResponse),
                 _turn: take(DEFAULT_WAIT)?,
             });
-            board.port_status(Port::Downstream(1))?;
+            board.port_status(Port::Downstream1)?;
             Ok(())
         };
 

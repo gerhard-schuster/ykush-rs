@@ -134,7 +134,7 @@ impl Board {
                 hidraw_node_of,
                 |node, found, left| crate::lock::NodeLock::take(node, found, left),
             )?;
-            (turn, future::block_on(device.open()).map_err(open_failed)?)
+            (turn, future::block_on(device.open())?)
         };
 
         // macOS: the handle itself is the turn. The board is opened
@@ -237,27 +237,28 @@ impl Link for DeviceReaderWriter {
         // whatever its first byte happens to be.
         let mut buf = [0u8; REPORT_SIZE + 1];
         buf[1..].copy_from_slice(out);
-        // The library has no timeouts, so each call races a timer: a board
-        // that stalls must not hang the program. Dropping the losing call
-        // leaves the handle usable.
-        future::block_on(future::or(
-            async { Some(self.write_output_report(&buf).await.map_err(Error::from)) },
-            async {
-                async_io::Timer::after(timeout).await;
-                None
-            },
-        ))
+        timed(timeout, self.write_output_report(&buf))
     }
 
     fn read(&mut self, into: &mut Report, timeout: Duration) -> Option<Result<usize>> {
-        future::block_on(future::or(
-            async { Some(self.read_input_report(into).await.map_err(Error::from)) },
-            async {
-                async_io::Timer::after(timeout).await;
-                None
-            },
-        ))
+        timed(timeout, self.read_input_report(into))
     }
+}
+
+/// Races a transport call against `timeout`, since the library has none: a
+/// board that stalls must not hang the program. Dropping the losing call
+/// leaves the handle usable.
+fn timed<T>(
+    timeout: Duration,
+    call: impl std::future::Future<Output = async_hid::HidResult<T>>,
+) -> Option<Result<T>> {
+    future::block_on(future::or(
+        async { Some(call.await.map_err(Error::from)) },
+        async {
+            async_io::Timer::after(timeout).await;
+            None
+        },
+    ))
 }
 
 /// Sends `out` and returns the answer, after getting back in step first when
@@ -396,9 +397,9 @@ impl<D> Seize<D> {
             }
             // IOKit names a vanished or returning board in several ways.
             Err(error) if self.may_reset || matches!(error, async_hid::HidError::NotConnected) => {
-                Attempt::Gone(open_failed(error))
+                Attempt::Gone(error.into())
             }
-            Err(error) => Attempt::Failed(open_failed(error)),
+            Err(error) => Attempt::Failed(error.into()),
         }
     }
 }
@@ -424,54 +425,38 @@ impl NodeWait {
         open: impl FnOnce(D) -> async_hid::HidResult<T>,
         busy: &str,
     ) -> Attempt<T> {
-        let opened = |result: async_hid::HidResult<T>| match result {
+        let device = match self.held.take() {
+            Some(board) => self.query(board, node_device),
+            None => match choose() {
+                Ok(device) => Ok(device),
+                Err(error @ Error::NotFound { .. }) => match held_board() {
+                    Some(board) => self.query(board, node_device),
+                    None if self.gone => return Attempt::Gone(error),
+                    None => return Attempt::Failed(error),
+                },
+                Err(error) => return Attempt::Failed(error),
+            },
+        };
+        match device.and_then(open) {
             Ok(dev) => Attempt::Got(dev),
             Err(error) if refused_as_busy(&error) => Attempt::Busy(busy.to_owned()),
-            Err(error @ async_hid::HidError::NotConnected) => Attempt::Gone(error.into()),
-            Err(error) => Attempt::Failed(open_failed(error)),
-        };
-        let outcome = 'attempt: {
-            let (found, node) = match self.held.take() {
-                Some(board) => board,
-                None => match choose() {
-                    Ok(device) => break 'attempt opened(open(device)),
-                    Err(error @ Error::NotFound { .. }) => match held_board() {
-                        Some(board) => board,
-                        None if self.gone => break 'attempt Attempt::Gone(error),
-                        None => break 'attempt Attempt::Failed(error),
-                    },
-                    Err(error) => break 'attempt Attempt::Failed(error),
-                },
-            };
-            let device = node_device(&node, &found);
-            self.held = Some((found, node));
-            opened(device.and_then(open))
-        };
-        if let Attempt::Gone(_) = outcome {
-            self.gone = true;
-            self.held = None;
+            Err(error @ async_hid::HidError::NotConnected) => {
+                self.gone = true;
+                self.held = None;
+                Attempt::Gone(error.into())
+            }
+            Err(error) => Attempt::Failed(error.into()),
         }
-        outcome
     }
-}
 
-/// Turns a refused open into an error that says what to do about it.
-///
-/// On Linux the board is a file, `/dev/hidrawN`, owned by root until a udev
-/// rule says otherwise. The library reports that as a plain `EACCES`, which
-/// on its own does not lead anyone to the rule.
-fn open_failed(error: async_hid::HidError) -> Error {
-    let denied = match &error {
-        async_hid::HidError::Other(inner) => inner
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied),
-        _ => false,
-    };
-
-    if denied {
-        Error::PermissionDenied
-    } else {
-        error.into()
+    fn query<D>(
+        &mut self,
+        (found, node): (String, std::path::PathBuf),
+        node_device: impl FnOnce(&std::path::Path, &str) -> async_hid::HidResult<D>,
+    ) -> async_hid::HidResult<D> {
+        let device = node_device(&node, &found);
+        self.held = Some((found, node));
+        device
     }
 }
 
@@ -583,7 +568,7 @@ fn detached_interfaces(usb_devices: &std::path::Path, serial: Option<&str>) -> V
             read(dir.join("bInterfaceClass")) == "03"
                 && std::fs::symlink_metadata(dir.join("driver")).is_err()
         })
-        .cloned()
+        .map(|name| sanitize(name))
         .collect()
 }
 
@@ -633,7 +618,7 @@ fn hidraw_boards() -> Vec<(String, std::path::PathBuf)> {
     };
     let mut boards: Vec<_> = dev
         .filter_map(|e| e.ok()?.file_name().into_string().ok())
-        .filter(|name| name.starts_with("hidraw"))
+        .filter(|name| is_hidraw_name(name))
         .filter_map(|hidraw| {
             // hidraw sits on hidbus, which sits on the USB driver.
             let hidbus = sysctl(format!("{}.%parent", node(&hidraw)))?;
@@ -726,10 +711,14 @@ fn hidraw_node(sysfs: &std::path::Path) -> Option<std::path::PathBuf> {
         .lines()
         .find_map(|line| line.strip_prefix("DEVNAME="))?
         .trim();
-    let number = name.strip_prefix("hidraw")?;
 
-    (!number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
-        .then(|| std::path::Path::new("/dev").join(name))
+    is_hidraw_name(name).then(|| std::path::Path::new("/dev").join(name))
+}
+
+/// Whether `name` is `hidraw` followed by one or more ASCII digits.
+fn is_hidraw_name(name: &str) -> bool {
+    name.strip_prefix("hidraw")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// One backend for the process. It is a handle rather than a resource, but
@@ -1109,7 +1098,7 @@ mod tests {
 
     #[test]
     fn a_refused_open_says_what_to_do_about_it() {
-        let error = open_failed(os_error(std::io::ErrorKind::PermissionDenied));
+        let error = Error::from(os_error(std::io::ErrorKind::PermissionDenied));
 
         assert!(matches!(&error, Error::PermissionDenied));
         assert_eq!(error.to_string(), PERMISSION_DENIED);
@@ -1121,11 +1110,11 @@ mod tests {
 
     #[test]
     fn any_other_open_failure_keeps_its_own_message() {
-        let error = open_failed(os_error(std::io::ErrorKind::NotFound));
+        let error = Error::from(os_error(std::io::ErrorKind::NotFound));
 
         assert!(matches!(&error, Error::Hid(msg) if msg != PERMISSION_DENIED));
         // A board that went away while being opened is unavailable.
-        let error = open_failed(async_hid::HidError::NotConnected);
+        let error = Error::from(async_hid::HidError::NotConnected);
         assert!(matches!(&error, Error::Unavailable(_)), "{error:?}");
     }
 
@@ -1372,7 +1361,7 @@ mod tests {
             let started = Instant::now();
 
             for i in 0..count {
-                let port = Port::Downstream(1 + (i % 3) as u8);
+                let port = Port::DOWNSTREAM[(i % 3) as usize];
                 let sent = Instant::now();
                 board
                     .port_status(port)

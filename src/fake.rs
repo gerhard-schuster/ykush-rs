@@ -15,6 +15,7 @@ use std::collections::VecDeque;
 use crate::device::{report, Report, Transport};
 use crate::error::{Error, Result};
 
+#[derive(Default)]
 pub struct FakeBoard {
     sent: RefCell<Vec<Report>>,
     answers: RefCell<VecDeque<Result<Report>>>,
@@ -25,18 +26,18 @@ impl FakeBoard {
     /// A board that is not expected to be read from. Reading anyway fails the
     /// test, which is how the write-only commands are pinned down.
     pub fn mute() -> Self {
-        FakeBoard {
-            sent: RefCell::new(Vec::new()),
-            answers: RefCell::new(VecDeque::new()),
-            desyncs: Cell::new(0),
-        }
+        FakeBoard::default()
     }
 
     /// A board that answers the next request with `payload`, zero padded.
     pub fn answering(payload: &[u8]) -> Self {
-        let board = FakeBoard::mute();
-        board.answers.borrow_mut().push_back(Ok(report(payload)));
-        board
+        FakeBoard::mute().then(payload)
+    }
+
+    /// Queues another zero-padded `payload` answer.
+    pub fn then(self, payload: &[u8]) -> Self {
+        self.answers.borrow_mut().push_back(Ok(report(payload)));
+        self
     }
 
     /// A board whose next request fails in the transport.

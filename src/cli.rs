@@ -9,7 +9,7 @@
 //! Parsing produces an [`Invocation`] and touches no hardware, so the whole
 //! command line surface can be tested on its own.
 
-use ykush::{Error, Port, PowerOnState, Result};
+use ykush::{Error, Gpio, Port, PowerOnState, Result};
 
 /// What the user asked the application to do.
 #[derive(Debug, PartialEq, Eq)]
@@ -21,8 +21,8 @@ pub enum Command {
     PortDown(Port),
     PortStatus(Port),
     Config(Port, PowerOnState),
-    ReadIo(u8),
-    WriteIo(u8, bool),
+    ReadIo(Gpio),
+    WriteIo(Gpio, bool),
     GpioControl(bool),
     Reset,
     Bootloader,
@@ -115,31 +115,20 @@ pub fn parse(args: &[String]) -> Result<Invocation> {
         no_wait = true;
     }
 
-    for opt in &opts {
-        if is_modifier(opt) {
-            continue;
-        }
-        if let Some(command) = command(opt)? {
-            return Ok(Invocation {
-                serial,
-                no_wait,
-                command,
-            });
-        }
-    }
+    let opt = opts
+        .iter()
+        .find(|opt| !is_modifier(opt))
+        .ok_or_else(|| Error::Usage("No command given".into()))?;
 
-    // Nothing on the line was a command.
-    Err(Error::Usage(
-        match opts.iter().find(|opt| !is_modifier(opt)) {
-            None => "No command given".to_owned(),
-            Some(unknown) => format!("Unknown option {}", unknown.name),
-        },
-    ))
+    Ok(Invocation {
+        serial,
+        no_wait,
+        command: command(opt)?,
+    })
 }
 
-/// Maps one option to a command. `None` for an option that is not a command, so
-/// the caller can keep looking.
-fn command(opt: &Opt) -> Result<Option<Command>> {
+/// Maps one option to a command.
+fn command(opt: &Opt) -> Result<Command> {
     let command = match opt.name.as_str() {
         "-h" | "--help" => Command::Help,
         "-v" | "--version" => Command::Version,
@@ -198,10 +187,10 @@ fn command(opt: &Opt) -> Result<Option<Command>> {
             count(opt.param(1, "a number of bytes")?)?,
         ),
 
-        _ => return Ok(None),
+        other => return Err(Error::Usage(format!("Unknown option {other}"))),
     };
 
-    Ok(Some(command))
+    Ok(command)
 }
 
 /// Splits the arguments into options. A token that belongs to no option is
@@ -226,12 +215,12 @@ fn split(args: &[String]) -> Result<Vec<Opt>> {
     Ok(opts)
 }
 
-/// Port of a switching command, `1|2|3|4|e|a`.
+/// Port of a switching or status command, `1|2|3|4|e|a`.
 fn port(value: &str) -> Result<Port> {
     match value {
-        "1" => Ok(Port::Downstream(1)),
-        "2" => Ok(Port::Downstream(2)),
-        "3" => Ok(Port::Downstream(3)),
+        "1" => Ok(Port::Downstream1),
+        "2" => Ok(Port::Downstream2),
+        "3" => Ok(Port::Downstream3),
         // The C++ application spells the external port `4` for switching and
         // `e` for configuration. Both spellings are accepted everywhere.
         "4" | "e" => Ok(Port::External),
@@ -243,11 +232,11 @@ fn port(value: &str) -> Result<Port> {
 }
 
 /// GPIO pin number, `1|2|3`.
-fn gpio(value: &str) -> Result<u8> {
+fn gpio(value: &str) -> Result<Gpio> {
     match value {
-        "1" => Ok(1),
-        "2" => Ok(2),
-        "3" => Ok(3),
+        "1" => Ok(Gpio::Gpio1),
+        "2" => Ok(Gpio::Gpio2),
+        "3" => Ok(Gpio::Gpio3),
         _ => Err(Error::Usage(format!(
             "Invalid GPIO number '{value}', expected 1, 2 or 3"
         ))),
@@ -355,7 +344,7 @@ mod tests {
 
     #[test]
     fn a_leading_board_name_is_ignored() {
-        assert_eq!(cmd("ykush3 -u 1"), Command::PortUp(Port::Downstream(1)));
+        assert_eq!(cmd("ykush3 -u 1"), Command::PortUp(Port::Downstream1));
     }
 
     #[test]
@@ -370,7 +359,7 @@ mod tests {
     fn extra_parameters_after_a_command_are_tolerated() {
         // C++ parity: the original reads the parameters it needs and ignores
         // the rest of the line.
-        assert_eq!(cmd("-u 1 2"), Command::PortUp(Port::Downstream(1)));
+        assert_eq!(cmd("-u 1 2"), Command::PortUp(Port::Downstream1));
     }
 
     #[test]
@@ -401,7 +390,7 @@ mod tests {
         let inv = parse(&args("-s YK00001 -d 2")).unwrap();
 
         assert_eq!(inv.serial.as_deref(), Some("YK00001"));
-        assert_eq!(inv.command, Command::PortDown(Port::Downstream(2)));
+        assert_eq!(inv.command, Command::PortDown(Port::Downstream2));
     }
 
     #[test]
@@ -411,7 +400,7 @@ mod tests {
         let inv = parse(&args("-d 2 -s YK00001")).unwrap();
 
         assert_eq!(inv.serial.as_deref(), Some("YK00001"));
-        assert_eq!(inv.command, Command::PortDown(Port::Downstream(2)));
+        assert_eq!(inv.command, Command::PortDown(Port::Downstream2));
     }
 
     #[test]
@@ -449,7 +438,7 @@ mod tests {
             assert!(inv.no_wait, "{line}");
             assert_eq!(
                 inv.command,
-                Command::PortStatus(Port::Downstream(1)),
+                Command::PortStatus(Port::Downstream1),
                 "{line}"
             );
         }
@@ -484,11 +473,12 @@ mod tests {
 
     #[test]
     fn port_numbers_map_to_ports() {
-        assert_eq!(cmd("-u 1"), Command::PortUp(Port::Downstream(1)));
-        assert_eq!(cmd("-u 3"), Command::PortUp(Port::Downstream(3)));
+        assert_eq!(cmd("-u 1"), Command::PortUp(Port::Downstream1));
+        assert_eq!(cmd("-u 3"), Command::PortUp(Port::Downstream3));
         assert_eq!(cmd("-u a"), Command::PortUp(Port::All));
-        assert_eq!(cmd("-d 2"), Command::PortDown(Port::Downstream(2)));
-        assert_eq!(cmd("-g 1"), Command::PortStatus(Port::Downstream(1)));
+        assert_eq!(cmd("-d 2"), Command::PortDown(Port::Downstream2));
+        assert_eq!(cmd("-g 1"), Command::PortStatus(Port::Downstream1));
+        assert_eq!(cmd("-g a"), Command::PortStatus(Port::All));
     }
 
     #[test]
@@ -522,15 +512,15 @@ mod tests {
     fn the_power_on_state_is_parsed() {
         assert_eq!(
             cmd("-c 1 0"),
-            Command::Config(Port::Downstream(1), PowerOnState::Off)
+            Command::Config(Port::Downstream1, PowerOnState::Off)
         );
         assert_eq!(
             cmd("-c 2 1"),
-            Command::Config(Port::Downstream(2), PowerOnState::On)
+            Command::Config(Port::Downstream2, PowerOnState::On)
         );
         assert_eq!(
             cmd("-c 3 2"),
-            Command::Config(Port::Downstream(3), PowerOnState::Persist)
+            Command::Config(Port::Downstream3, PowerOnState::Persist)
         );
     }
 
@@ -547,9 +537,9 @@ mod tests {
 
     #[test]
     fn gpio_commands_are_parsed() {
-        assert_eq!(cmd("-r 2"), Command::ReadIo(2));
-        assert_eq!(cmd("-w 1 1"), Command::WriteIo(1, true));
-        assert_eq!(cmd("-w 3 0"), Command::WriteIo(3, false));
+        assert_eq!(cmd("-r 2"), Command::ReadIo(Gpio::Gpio2));
+        assert_eq!(cmd("-w 1 1"), Command::WriteIo(Gpio::Gpio1, true));
+        assert_eq!(cmd("-w 3 0"), Command::WriteIo(Gpio::Gpio3, false));
         assert_eq!(cmd("--gpio enable"), Command::GpioControl(true));
         assert_eq!(cmd("--gpio disable"), Command::GpioControl(false));
     }
@@ -633,6 +623,6 @@ mod tests {
     fn the_first_command_on_the_line_wins() {
         // Same rule as in the C++ application, which returns after the first
         // command it recognises.
-        assert_eq!(cmd("-u 1 -d 2"), Command::PortUp(Port::Downstream(1)));
+        assert_eq!(cmd("-u 1 -d 2"), Command::PortUp(Port::Downstream1));
     }
 }

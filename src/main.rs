@@ -4,6 +4,8 @@
 //! The board handling itself lives in the `ykush` library target of this
 //! package; what remains here is parsing the command line and printing.
 
+#![forbid(unsafe_code)]
+
 mod cli;
 mod help;
 
@@ -28,18 +30,26 @@ fn main() -> ExitCode {
     let program = program_name(&args);
     let mut out = io::stdout().lock();
 
-    match run(&program, args.get(1..).unwrap_or_default(), &mut out) {
+    finish(
+        &program,
+        run(&program, args.get(1..).unwrap_or_default(), &mut out),
+        &mut io::stderr(),
+    )
+}
+
+fn finish(program: &str, result: Result<()>, err_out: &mut impl Write) -> ExitCode {
+    match result {
         Ok(()) => ExitCode::SUCCESS,
+        // A downstream pipe reader that closed early (e.g. `| head -n 1`) is
+        // normal shell usage, not an I/O error to report.
+        Err(Error::Io(err)) if err.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
         Err(err) => {
             if let Error::Usage(msg) = &err {
-                let _ = writeln!(io::stderr(), "{msg}\n");
-                let _ = help::print_usage(&mut io::stderr(), &program);
-                let _ = writeln!(
-                    io::stderr(),
-                    "\nRun '{program} -h' for the list of options."
-                );
+                let _ = writeln!(err_out, "{msg}\n");
+                let _ = help::print_usage(err_out, program);
+                let _ = writeln!(err_out, "\nRun '{program} -h' for the list of options.");
             } else {
-                let _ = writeln!(io::stderr(), "{err}");
+                let _ = writeln!(err_out, "{err}");
             }
             ExitCode::from(err.exit_code())
         }
@@ -77,7 +87,11 @@ fn execute<T: Transport>(board: &Ykush3<T>, command: &Command, out: &mut impl Wr
     match command {
         Command::PortUp(port) => board.port_up(*port)?,
         Command::PortDown(port) => board.port_down(*port)?,
-        Command::PortStatus(port) => writeln!(out, "{}", board.port_status(*port)?)?,
+        Command::PortStatus(port) => {
+            for &p in port.ports() {
+                writeln!(out, "{}", board.port_status(p)?)?;
+            }
+        }
 
         Command::Config(port, state) => board.config_port(*port, *state)?,
 
@@ -157,7 +171,7 @@ fn program_name(args: &[String]) -> String {
 mod tests {
     use super::*;
     use ykush::fake::FakeBoard;
-    use ykush::Port;
+    use ykush::{Gpio, Port};
 
     /// Runs a command against a board answering with `answer` and returns what
     /// was printed.
@@ -173,20 +187,42 @@ mod tests {
     #[test]
     fn the_port_state_is_printed_like_in_the_cpp_application() {
         assert_eq!(
-            output(&[0x01, 0x11], Command::PortStatus(Port::Downstream(1))),
+            output(&[0x01, 0x11], Command::PortStatus(Port::Downstream1)),
             "Port 1: on\n"
         );
         assert_eq!(
-            output(&[0x01, 0x02], Command::PortStatus(Port::Downstream(2))),
+            output(&[0x01, 0x02], Command::PortStatus(Port::Downstream2)),
             "Port 2: off\n"
+        );
+    }
+
+    #[test]
+    fn the_state_of_all_ports_lists_each_downstream_port() {
+        let fake = FakeBoard::answering(&[0x01, 0x11])
+            .then(&[0x01, 0x02])
+            .then(&[0x01, 0x13]);
+        let board = Ykush3::with_transport(fake);
+        let mut out = Vec::new();
+
+        execute(&board, &Command::PortStatus(Port::All), &mut out).unwrap();
+
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "Port 1: on\nPort 2: off\nPort 3: on\n"
         );
     }
 
     #[test]
     fn a_gpio_read_prints_the_pin_level() {
         // The C++ application only puts the level into the exit code.
-        assert_eq!(output(&[0x01, 0x30, 0x01, 0x01], Command::ReadIo(1)), "1\n");
-        assert_eq!(output(&[0x01, 0x30, 0x01, 0x00], Command::ReadIo(1)), "0\n");
+        assert_eq!(
+            output(&[0x01, 0x30, 0x01, 0x01], Command::ReadIo(Gpio::Gpio1)),
+            "1\n"
+        );
+        assert_eq!(
+            output(&[0x01, 0x30, 0x01, 0x00], Command::ReadIo(Gpio::Gpio1)),
+            "0\n"
+        );
     }
 
     #[test]
@@ -214,8 +250,8 @@ mod tests {
 
     #[test]
     fn switching_commands_print_nothing() {
-        assert_eq!(output(&[0x01], Command::PortUp(Port::Downstream(1))), "");
-        assert_eq!(output(&[0x01], Command::WriteIo(1, true)), "");
+        assert_eq!(output(&[0x01], Command::PortUp(Port::Downstream1)), "");
+        assert_eq!(output(&[0x01], Command::WriteIo(Gpio::Gpio1, true)), "");
         assert_eq!(output(&[0x01, 0x51], Command::I2cSlave(true)), "");
     }
 
@@ -224,7 +260,7 @@ mod tests {
         let board = Ykush3::with_transport(FakeBoard::failing(Error::NoResponse));
         let mut out = Vec::new();
 
-        let result = execute(&board, &Command::PortStatus(Port::Downstream(1)), &mut out);
+        let result = execute(&board, &Command::PortStatus(Port::Downstream1), &mut out);
 
         assert!(matches!(result, Err(Error::NoResponse)));
         assert!(out.is_empty());
@@ -306,12 +342,12 @@ mod tests {
 
         let answered: Vec<(Vec<u8>, Command)> = vec![
             (vec![0x01], Command::PortUp(Port::All)),
-            (vec![0x01], Command::PortDown(Port::Downstream(2))),
+            (vec![0x01], Command::PortDown(Port::Downstream2)),
             (
                 vec![0x01],
-                Command::Config(Port::Downstream(1), PowerOnState::Persist),
+                Command::Config(Port::Downstream1, PowerOnState::Persist),
             ),
-            (vec![0x01], Command::WriteIo(2, false)),
+            (vec![0x01], Command::WriteIo(Gpio::Gpio2, false)),
             (vec![0x01], Command::GpioControl(false)),
             (vec![0x01, 0x51], Command::I2cSlave(true)),
             (vec![0x01, 0x51], Command::I2cMaster(false)),
@@ -374,6 +410,14 @@ mod tests {
         );
 
         assert!(matches!(result, Err(Error::Usage(_))));
+    }
+
+    #[test]
+    fn a_broken_pipe_exits_cleanly_without_an_error_message() {
+        let pipe = Error::Io(io::Error::from(io::ErrorKind::BrokenPipe));
+        let mut err = Vec::new();
+        assert_eq!(finish("ykushctrl", Err(pipe), &mut err), ExitCode::SUCCESS);
+        assert!(err.is_empty());
     }
 
     /// Needs a YKUSH3 attached.
