@@ -37,9 +37,8 @@ program has open is found through `sysctl`.
   board it supports is still the YKUSH3 only. The udev rule file is
   `60-ykush.rules`.
 - A board unplugged after it was opened ends with `69` like one that is
-  not there, instead of `74`, which asked for a retry. Not yet on Linux:
-  with the pinned transport revision the unplug comes as `ENODEV`, measured
-  with a board unplugged through sysfs, and still ends with `74`.
+  not there (`NotConnected`, `Disconnected`, or `ENODEV` on Linux), instead
+  of `74`, which asked for a retry.
 - A waiting invocation keeps waiting while the board comes back from a reset
   by the program that held it, on macOS and FreeBSD; before, it gave up with
   "not found" as soon as the board was gone. Measured on a Mac: 10 of 10

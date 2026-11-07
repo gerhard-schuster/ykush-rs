@@ -128,11 +128,25 @@ impl std::error::Error for Error {
 
 impl From<async_hid::HidError> for Error {
     /// A board that is no longer connected is unavailable, not an I/O error
-    /// that a retry would cure.
+    /// that a retry would cure. On Linux, hidraw reports a device unplugged
+    /// after it was opened as `ENODEV` (19), and a missing udev rule as
+    /// `EACCES` (`PermissionDenied`).
     fn from(e: async_hid::HidError) -> Self {
+        const ENODEV: i32 = 19;
         match e {
             async_hid::HidError::NotConnected | async_hid::HidError::Disconnected => {
                 Error::Unavailable("The YKUSH3 is no longer connected".into())
+            }
+            async_hid::HidError::Other(ref inner) => {
+                if let Some(io) = inner.downcast_ref::<std::io::Error>() {
+                    if io.kind() == std::io::ErrorKind::PermissionDenied {
+                        return Error::PermissionDenied;
+                    }
+                    if io.raw_os_error() == Some(ENODEV) {
+                        return Error::Unavailable("The YKUSH3 is no longer connected".into());
+                    }
+                }
+                Error::Hid(e.to_string())
             }
             e => Error::Hid(e.to_string()),
         }
@@ -153,6 +167,7 @@ mod tests {
         for gone in [
             async_hid::HidError::NotConnected,
             async_hid::HidError::Disconnected,
+            async_hid::HidError::from(std::io::Error::from_raw_os_error(19)),
         ] {
             let error = Error::from(gone);
             assert!(matches!(error, Error::Unavailable(_)), "{error:?}");

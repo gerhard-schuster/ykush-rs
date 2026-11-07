@@ -12,6 +12,12 @@ on:
       - Cargo.lock
       - deny.toml
       - .github/workflows/audit.yml
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - deny.toml
+      - .github/workflows/audit.yml
   workflow_dispatch:
 
 # The job only reads the repository and reports.

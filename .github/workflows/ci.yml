@@ -17,6 +17,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  RUST_TOOLCHAIN: "1.99.0"
 
 # The actions are pinned to commits rather than tags, which anyone with write
 # access to the action repository could repoint. The comment names the tag the
@@ -42,6 +43,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
       - name: Cache the registry and the build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -49,8 +53,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-
       - run: cargo build --release --locked
       - run: cargo test --locked
 
@@ -64,6 +68,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+      - run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
       - name: Cache the registry and the build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -71,11 +78,13 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-
       - run: rustup component add rustfmt clippy
+      - run: rustup target add aarch64-unknown-freebsd
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets --locked
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo clippy --all-targets --locked --target aarch64-unknown-freebsd -- -D warnings
 
   # Checks that the rust-version in Cargo.toml is the truth rather than a wish.
   minimum-supported-rust:
@@ -94,5 +103,6 @@ jobs:
       - name: Build with the rust-version from Cargo.toml
         run: |
           msrv="$(grep '^rust-version' Cargo.toml | cut -d'"' -f2)"
-          rustup toolchain install "$msrv" --profile minimal
+          rustup toolchain install "$msrv" --profile minimal --target aarch64-unknown-freebsd
           cargo "+$msrv" check --all-targets --locked
+          cargo "+$msrv" check --all-targets --locked --target aarch64-unknown-freebsd
