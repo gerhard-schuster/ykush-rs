@@ -151,7 +151,7 @@ So does one that relies on the original's exit codes, which say little: see
 |---|---|
 | `-u 1\|2\|3\|4\|a` | power a port up (4 is the external 5V output, a is all of them) |
 | `-d 1\|2\|3\|4\|a` | power a port down |
-| `-g 1\|2\|3\|4` | report whether a port is on |
+| `-g 1\|2\|3\|4\|a` | report whether a port is on (a prints ports 1 to 3) |
 | `-on` / `-off` | switch the external 5V output |
 | `-l` | list the attached boards |
 | `-s <serial>` | address the board with that serial number |
@@ -169,6 +169,8 @@ So does one that relies on the original's exit codes, which say little: see
 | `--boot` | stop in the bootloader |
 | `--firmware-version` / `--bootloader-version` | print the versions |
 | `-v`, `--version` / `-h`, `--help` | version and help |
+
+A `man(1)` page is in [`man/ykushctrl.1`](man/ykushctrl.1).
 
 ### Exit status
 
@@ -423,7 +425,7 @@ v1.2.1 or in the online reference, yet both work - see
 
 ## How it is put together
 
-The package builds two targets: the `ykush3` **library**, which holds everything that
+The package builds two targets: the `ykush` **library**, which holds everything that
 touches the board, and the `ykushctrl` **binary**, a command line front end on top of it.
 
 | File | Target | Contents |
@@ -458,8 +460,8 @@ A Rust program can depend on the library and skip the command line entirely:
 use ykush::{Port, Ykush3};
 
 let board = Ykush3::open(None)?;            // or Some("Y3N13808")
-board.port_down(Port::Downstream(2))?;
-println!("{}", board.port_status(Port::Downstream(2))?);
+board.port_down(Port::Downstream2)?;
+println!("{}", board.port_status(Port::Downstream2)?);
 ```
 
 **Open the board once and keep it.** A rig that opens per operation still works, but every
@@ -495,7 +497,7 @@ ykushctrl = { path = "../ykush-rs", features = ["fake"] }
 use ykush::{fake::FakeBoard, Port, Ykush3};
 
 let board = Ykush3::with_transport(FakeBoard::answering(&[0x01]));
-board.port_up(Port::Downstream(1))?;
+board.port_up(Port::Downstream1)?;
 assert_eq!(board.transport().sent_count(), 1);
 ```
 
@@ -505,8 +507,8 @@ command line application.
 ## Tests
 
 ```
-cargo test                                    # 173 tests and a doctest, no
-                                              # hardware needed (178 on Linux)
+cargo test                                    # 174 tests and a doctest, no
+                                              # hardware needed (179 on Linux)
 cargo test -- --ignored --test-threads=1      # 11 more: 9 need a board, 2 only
                                               # the HID stack of the system;
                                               # on Linux 3 more that need a board
@@ -524,14 +526,14 @@ into the five second limit.
 | Group | Tests | Subject |
 |---|---|---|
 | `cli` | 36 | grammar, board selection, `--no-wait`, every command, every error message |
-| `ykush3` | 42 | the bytes each command sends, reading answers, error paths, a swept and a hand-picked pass over generated answers |
-| `main` | 15 | output format, dispatch of every command, program name |
+| `ykush3` | 40 | the bytes each command sends, reading answers, error paths, a swept and a hand-picked pass over generated answers |
+| `main` | 17 | output format, dispatch of every command, program name |
 | `error`, `help`, `device`, `sanitize` | 47 | error texts, exit codes, help output, report padding, waiting for a busy or re-enumerating board on macOS and FreeBSD against fakes, the Linux permission and driver diagnostics, the hidraw node from sysfs, the character filter |
 | `lock` | 16, on Linux 21 | two invocations hold the board one after the other, waiting runs out at the limit, `--no-wait` makes one attempt, a failed command lets go, a board gone for a moment is waited for, a node that moves while it is locked is let go; on Linux the same against a real `flock` on a temporary file |
-| `tests/cli.rs` | 11 | the built binary: exit codes, stdout versus stderr |
+| `tests/cli.rs` | 12 | the built binary: exit codes, stdout versus stderr, manual page |
 | `tests/encoding.rs` | 6 | every file is valid UTF-8 within Latin-1, and the rule itself |
 | doctest | 1 | the library example compiles; `no_run`, since it needs a board |
-| **running without hardware** | **173 + 1**, on Linux **178 + 1** | |
+| **running without hardware** | **174 + 1**, on Linux **179 + 1** | |
 | `--ignored`, needs a board | 9, on Linux 12 | opening and real exchanges, the acknowledged switch, the echoed pin and port, 2000 status reads on one handle, a second open of a held board refused as busy; on Linux the built binary against a lock held by another process, with and without `--no-wait` |
 | `--ignored`, needs only the HID stack | 2 | enumeration when nothing is attached |
 
@@ -553,8 +555,9 @@ there and not counted.
 
 | Run | Lines | Missed |
 |---|---|---|
-| `cargo test` only, no board needed | 90.36 % | 215 of 2231 |
-| `cargo test` and the hardware run, board `Y3N13808` on firmware 1.5.0 attached | 96.91 % | 69 of 2231 |
+| `cargo test` only, no board needed (2026-11-07, after the exclusive open, resync, and FreeBSD/reset-wait fake tests) | 91.37 % | 246 of 2849 |
+| `cargo test` only, no board needed (2026-10-31 at 83c3327) | 90.36 % | 215 of 2231 |
+| `cargo test` and the hardware run, board `Y3N13808` on firmware 1.5.0 attached (2026-10-31 at 83c3327) | 96.91 % | 69 of 2231 |
 
 `cli.rs`, `error.rs`, `fake.rs` and `sanitize.rs` are at 100 % in both runs. Without a board
 most missed lines are in `device.rs` (143), the transport that needs a device. With the board,

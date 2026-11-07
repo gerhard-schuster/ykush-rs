@@ -1,0 +1,201 @@
+.\" SPDX-License-Identifier: Apache-2.0
+.Dd November 7, 2026
+.Dt YKUSHCTRL 1
+.Os
+.Sh NAME
+.Nm ykushctrl
+.Nd control a Yepkit YKUSH3 switchable USB hub over USB HID
+.Sh SYNOPSIS
+.Nm
+.Op Fl s Ar SERIAL
+.Op Fl -no-wait
+.Ar COMMAND
+.Sh DESCRIPTION
+.Nm
+switches the three downstream USB 3.0 ports and the external 5 V output of a
+Yepkit YKUSH3 board (VID 0x04D8, PID 0xF11B), configures their power-on state,
+drives the three GPIO pins, and speaks to the board's I2C bridge.
+A leading
+.Cm ykush3
+argument is accepted and ignored for compatibility with Yepkit's
+.Ic ykushcmd .
+.Pp
+Two invocations addressing the same board take turns: on Linux through an
+advisory
+.Xr flock 2
+on the board's
+.Pa /dev/hidrawN
+node, on FreeBSD through the single-open
+.Xr hidraw 4
+node itself, and on macOS through an exclusive IOKit open.
+A second invocation waits up to five seconds for the board, or fails at once
+with
+.Fl -no-wait .
+.Ss Port commands
+.Ar PORT
+is
+.Cm 1 , 2
+or
+.Cm 3
+for the downstream USB ports,
+.Cm 4
+or
+.Cm e
+for the external 5 V output, or
+.Cm a
+for all three downstream ports at once.
+.Bl -tag -width "--i2c-set-address ADDR"
+.It Fl u Ar PORT
+Power
+.Ar PORT
+up.
+.It Fl d Ar PORT
+Power
+.Ar PORT
+down.
+.It Fl g Ar PORT
+Print whether
+.Ar PORT
+is on
+.Pq Ql on
+or off
+.Pq Ql off ,
+one line per port.
+.It Fl on
+Shorthand for
+.Fl u Cm 4 .
+.It Fl off
+Shorthand for
+.Fl d Cm 4 .
+.It Fl c Ar PORT Ar STATE
+Configure what single port
+.Ar PORT
+.Pq Cm 1 | 2 | 3 | 4 | e
+does after a reset or power cut:
+.Cm 0
+stay off,
+.Cm 1
+come up,
+.Cm 2
+restore the state it had before losing power.
+.El
+.Ss GPIO commands
+.Ar PIN
+is
+.Cm 1 , 2
+or
+.Cm 3 ;
+.Ar LEVEL
+is
+.Cm 0
+or
+.Cm 1 .
+.Bl -tag -width "--i2c-set-address ADDR"
+.It Fl r Ar PIN
+Read the logic level of
+.Ar PIN
+and print
+.Ql 0
+or
+.Ql 1 .
+.It Fl w Ar PIN Ar LEVEL
+Drive
+.Ar PIN
+low
+.Pq Cm 0
+or high
+.Pq Cm 1 .
+.It Fl -gpio Cm enable | disable
+Hand the GPIO pins over to the board to switch the like-numbered downstream
+ports, or take them back for
+.Fl r
+and
+.Fl w .
+Takes effect after the next reset or power cut.
+.El
+.Ss I2C commands
+Addresses and bytes are hexadecimal, with or without a
+.Ql 0x
+prefix.
+7-bit I2C addresses are aligned to the top of the byte (write
+.Ql 0xA2
+for address
+.Ql 0x51 ) .
+.Bl -tag -width "--i2c-set-address ADDR"
+.It Fl -i2c-slave Cm enable | disable
+Enable or disable I2C slave control mode.
+.It Fl -i2c-master Cm enable | disable
+Enable or disable I2C master (USB-to-I2C gateway) mode.
+.It Fl -i2c-set-address Ar ADDR
+Set the I2C address the board answers to in slave mode.
+.It Fl -i2c-write Ar ADDR Ar BYTE ...
+Write between 1 and 60 bytes to the I2C slave at
+.Ar ADDR .
+.It Fl -i2c-read Ar ADDR Ar COUNT
+Read up to 60 bytes from the I2C slave at
+.Ar ADDR
+and print one decimal number per line.
+.El
+.Ss Board commands and modifiers
+.Bl -tag -width "--i2c-set-address ADDR"
+.It Fl l
+List the serial numbers of the attached YKUSH3 boards.
+.It Fl s Ar SERIAL
+Send the command to the board with serial number
+.Ar SERIAL
+instead of the first one the system enumerates.
+.It Fl -no-wait
+Fail at once with exit status 75 when the board is in use, instead of waiting
+up to five seconds for it.
+.It Fl -firmware-version
+Print the firmware version of the board.
+.It Fl -bootloader-version
+Print the bootloader version of the board.
+.It Fl -reset
+Restart the board.
+.It Fl -boot
+Restart into the USB bootloader.
+.It Fl v , Fl -version
+Print the version of
+.Nm .
+.It Fl h , Fl -help
+Print the usage and option summary.
+.El
+.Sh EXIT STATUS
+The exit status follows
+.Xr sysexits 3 :
+.Bl -tag -width "101" -compact
+.It Cm 0
+Success; also
+.Fl l
+when no board is attached.
+.It Cm 64
+Invalid command line.
+.It Cm 69
+No board found, unknown serial number, board disconnected, HID driver
+detached, or the board rejected the command.
+.It Cm 74
+No answer within the five second timeout, a truncated report, a transport
+error, or writing to standard output failed.
+.It Cm 75
+The board is in use by another process (after waiting five seconds, or at once
+with
+.Fl -no-wait ) .
+.It Cm 76
+An answer from the board did not fit the request.
+.It Cm 77
+Permission denied opening the device node.
+.It Cm 101
+Internal panic.
+.El
+.Sh EXAMPLES
+Power port 2 down, read the state of all three downstream ports, and configure
+port 2 to come up on the next reset:
+.Bd -literal -offset indent
+ykushctrl -s Y3N13808 -d 2
+ykushctrl -g a
+ykushctrl -c 2 1
+.Ed
+.Sh SEE ALSO
+.Xr flock 2 ,
+.Xr sysexits 3
