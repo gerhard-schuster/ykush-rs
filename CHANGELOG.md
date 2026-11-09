@@ -15,6 +15,9 @@ program has open is found through `sysctl`.
 
 ### Changed
 
+- The minimum supported Rust is 1.98, up from 1.86: the first version with a
+  standard library published for `aarch64-unknown-freebsd`, so CI can check all
+  three systems with it.
 - **Incompatible:** the exit status tells what to do next instead of being
   `1` for every error, after sysexits(3): `64` invalid command line, `69` no
   board, board unreachable or the board refused the command, `74` no answer

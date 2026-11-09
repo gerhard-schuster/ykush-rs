@@ -1032,7 +1032,7 @@ mod tests {
     /// validation would hide, and random bytes carry an acknowledgement only
     /// once in 256 tries.
     fn generated_answer(state: &mut u64, valid: &Report) -> Report {
-        if xorshift(state) % 4 == 0 {
+        if xorshift(state).is_multiple_of(4) {
             let mut answer: Report = [0; REPORT_SIZE];
             for chunk in answer.chunks_mut(8) {
                 chunk.copy_from_slice(&xorshift(state).to_le_bytes());

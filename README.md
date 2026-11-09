@@ -31,7 +31,7 @@ cargo build --release
 
 The result is a single binary, `target/release/ykushctrl`.
 
-With a Rust toolchain (1.86 or newer) installed, building and installing is one step,
+With a Rust toolchain (1.98 or newer) installed, building and installing is one step,
 no clone needed:
 
 ```

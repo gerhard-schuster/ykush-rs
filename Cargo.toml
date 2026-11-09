@@ -2,7 +2,7 @@
 name = "ykushctrl"
 version = "0.4.1"
 edition = "2021"
-rust-version = "1.86"
+rust-version = "1.98"
 license = "Apache-2.0"
 description = "Control application for the Yepkit YKUSH3 switchable USB hub"
 readme = "README.md"
