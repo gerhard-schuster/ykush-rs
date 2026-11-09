@@ -133,8 +133,8 @@ it, and `-l` lists it.
 ## Using it
 
 The **switches** are compatible with the original, and a leading `ykush3` is accepted and
-ignored so existing invocations keep working. What the original tolerated silently - a
-second `-s`, an unknown option after `ykush3` - is an error here; the
+ignored so existing invocations keep working. What the original tolerated silently after
+`ykush3` - a second `-s`, an unknown option - is an error here; the
 [differences table](#where-it-differs-from-the-c-original) has the full list:
 
 ```
@@ -737,7 +737,7 @@ without access to the node, a call exits `77` at once.
 | an invalid port number | help with no explanation | a specific error message |
 | `--reset`, `--boot` | wait for an answer the board no longer sends | send without reading |
 | `-s` after the command | is ignored | works wherever it appears |
-| `-s` given twice | the last one wins silently | rejected as ambiguous |
+| `-s` given twice, after `ykush3` | the last one wins silently | rejected as ambiguous |
 | a stray first word (`ykushcmd foo -u 1`) | the help, returns `-1` | rejected with a message, exit `64` |
 | an unknown option before the command, after `ykush3` (`ykush3 -x -u 1`) | silently skipped, the command runs | rejected, exit `64`; the command does not run |
 | the external port | `4` for switching, `e` for configuring | both spellings everywhere |
