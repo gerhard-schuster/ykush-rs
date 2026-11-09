@@ -105,4 +105,5 @@ transport, and is kept as the record of that state. Note who wrote them: the
 author of the code, not an outside party. They are a record of what was
 examined, not an independent audit. The review of the sister project
 ykur-rs on 2026-11-02 found the same exchange in this program; the addendum
-of 2026-11-02 in SECURITY-REVIEW-0.4.0.md says what changed here.
+of 2026-11-02 in SECURITY-REVIEW-0.4.0.md says what changed here. Its addendum
+of 2026-11-07, corrected on 2026-11-09, covers the Linux and FreeBSD support.

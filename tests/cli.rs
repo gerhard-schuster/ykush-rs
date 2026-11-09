@@ -23,6 +23,20 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
+fn a_reader_that_closed_the_pipe_is_not_an_error() {
+    let (reader, writer) = std::io::pipe().expect("a pipe");
+    drop(reader);
+    let output = Command::new(env!("CARGO_BIN_EXE_ykushctrl"))
+        .arg("-h")
+        .stdout(writer)
+        .output()
+        .expect("the binary should run");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn without_arguments_the_help_goes_to_stdout_and_succeeds() {
     let output = run(&[]);
 

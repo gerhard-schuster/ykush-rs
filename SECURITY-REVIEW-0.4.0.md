@@ -242,10 +242,16 @@ instead of 11 ms. An answer left behind by a program that exits without reading 
 the next invocation on macOS, before the change or after it, so the case is not reproduced
 there. It has not been tried on Linux, where the review expects it.
 
-## Addendum 2026-11-07 - re-review at `09fadd5` (0.5.0 state)
+## Addendum 2026-11-07 - re-review based on `09fadd5`
+
+Corrected on 2026-11-09 after an independent review of the branch. The addendum named `09fadd5`
+as its state, but its fixes came after that commit, in the change that added it. References now
+name symbols instead of line numbers, and the checks below are from the correction. The
+corrections change the record, not its findings, and are not a new review.
 
 Between `26e550e` (0.4.0) and `09fadd5` ("Test the waiting on macOS and FreeBSD against
-fakes"), the crate was renamed to `ykush-rs`, added Linux and FreeBSD support, exclusive
+fakes"), the repository was renamed to `ykush-rs` (package `ykushctrl`, library `ykush`), and the
+program gained Linux and FreeBSD support, exclusive
 access / advisory locking (`--no-wait`), Linux detached-interface diagnostics, waiting across
 board resets on macOS and FreeBSD, and `sysexits(3)` exit codes. All source files (`src/`,
 `tests/`, `Cargo.toml`, `Cargo.lock`, `deny.toml`, `SECURITY.md`, and `.github/workflows/`)
@@ -253,42 +259,57 @@ were re-read against the categories above.
 
 **Result of the 2026-11-07 update: no HIGH or MEDIUM findings.** One new observation below the
 reporting bar applies specifically to `ykush-rs`'s Linux detached-interface diagnostic
-(`B-ykush-1` below), alongside the platform and supply-chain observations shared with
-`ykur-rs`.
+(`B-ykush-1` below), alongside the platform and supply-chain observations `B-ykush-2` to
+`B-ykush-6`. The commands behind this result were not recorded (UNKNOWN).
 
-### Updated attack surface (`09fadd5`)
+### Checks run for the correction (2026-11-09, macOS aarch64, Rust 1.99.0 and 1.98.1)
+
+No board was attached, and no test ran on Linux or FreeBSD. These checks say nothing about the
+findings above; they record the state the correction was made on.
+
+| Command | Exit | Result |
+|---|---|---|
+| `cargo test --all-features --locked` | 0 | 176 tests and a doctest pass, 11 ignored |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | 0 | no warning |
+| the same without `--all-features`, with `--target aarch64-unknown-linux-gnu` | 0 | no warning |
+| `cargo +1.98 check --all-targets --locked` | 0 | builds |
+| the same with `--target aarch64-unknown-freebsd` | 0 | builds |
+| `cargo +1.98 clippy --all-targets --locked --target aarch64-unknown-freebsd -- -D warnings` | 0 | no warning |
+| `cargo fmt --check` | 0 | clean |
+| `cargo deny --all-features check` | 0 | advisories, bans, licenses and sources ok |
+
+### Updated attack surface (after the fixes)
 
 | Area | What was found |
 |---|---|
 | Parsing the answers (`src/ykush3.rs`) | Fixed 64 byte `Report`, freshly zeroed per exchange; short reads rejected; `i2c_write` bounds `data.len() <= 60` (`I2C_MAX_BYTES`) so `req[4..4 + data.len()]` fits inside 64 bytes; `i2c_read` bounds `len <= 60` and checks `reported <= usize::from(len)` before slicing `resp[3..3 + reported]` (highest index 63); all other reads use constant indices `0..=4`. Every command validates echoed opcode/port/pin except switching/config commands where pre-1.1.0 firmware answers with `0x01` only, covered by the version-query resync (`0x61 0x02`) + 50 ms quiet window |
-| Command execution (`src/device.rs`) | FreeBSD only: `/sbin/sysctl` is invoked via `Command::new("/sbin/sysctl").args(["-n", &name])` during enumeration (`sysctl_value`, `src/device.rs:644`). No shell is invoked; the binary path is fixed; `-n` precedes the key argument |
-| File system & `/sys`, `/dev` access (`src/device.rs`, `src/lock.rs`) | Linux reads `/sys/bus/usb/devices` (`detached_interfaces`) and `/sys/class/hidraw/*/device/uevent` (inside `async-hid`), and opens `/dev/hidrawN` in `lock.rs` after checking `hidraw` + ASCII digits (`hidraw_node`, `src/device.rs:723`). FreeBSD reads `/dev` (`hidraw_boards`, `src/device.rs:615`) and opens `/dev/hidraw*` (`node_device`) |
-| Locking on Linux (`src/lock.rs`) | `flock(LOCK_EX \| LOCK_NB)` on `/dev/hidrawN` via `rustix::fs::flock`. After locking, `take_stable` (`src/lock.rs:122`) re-reads `hidraw_node_of(&device)` to guard against udev renumbering while waiting (bounded by `NODE_ROUNDS = 3` and the total `wait` budget) |
-| Locking & reset waiting on macOS (`src/device.rs:359`) | `Access::Exclusive` (`kIOHIDOptionsTypeSeizeDevice` in the pinned `async-hid` fork). `Seize` keeps polling across a brief disappearance while the board resets (`--reset` / `reset`), bounded by the wall-clock `wait` deadline in `lock::wait_for` |
-| Locking & reset waiting on FreeBSD (`src/device.rs:410`) | `hidraw(4)` allows one open at a time. When a target board is held (`EBUSY`), `NodeWait` records its `(serial, node)` and on subsequent 10 ms polls calls `node_device` on that single `/dev/hidrawN` node only, avoiding `EBUSY` interference with other HID devices on the host and avoiding repeated `/sbin/sysctl` spawns during the wait |
-| Terminal & CLI output (`src/sanitize.rs`, `src/main.rs`) | `sanitize()` permits only `0x20..=0x7E` and `U+FFFD`. Applied to USB serial numbers on all platforms (including Linux sysfs `serial` in `detached_interfaces` at `src/device.rs:569` and FreeBSD `sernum` in `ykush3_serial` at `src/device.rs:607`) and to `argv` items before putting them into `Error::Usage` |
-| `unsafe` and panics | Zero `unsafe` in `src/` and `tests/`. No reachable panics in production code (`unreachable!` at `src/main.rs:106` is guarded by `run()` handling `Help`, `Version` and `List` at lines 54-61; `expect` at `src/fake.rs:79` is behind `#[cfg(any(test, feature = "fake"))]`) |
-| Test suite (`09fadd5`) | 174 active unit/integration/encoding tests + 1 doctest pass on macOS (179 on Linux with the 5 `flock` unit tests); 11 hardware tests ignored (14 on Linux) |
+| Command execution (`src/device.rs`) | FreeBSD only: `/sbin/sysctl` is invoked via `Command::new("/sbin/sysctl").args(["-n", &name])` during enumeration (the `sysctl` closure in `hidraw_boards`). No shell is invoked; the binary path is fixed; `-n` precedes the key argument |
+| File system & `/sys`, `/dev` access (`src/device.rs`, `src/lock.rs`) | Linux reads `/sys/bus/usb/devices` (`detached_interfaces`) and `/sys/class/hidraw/*/device/uevent` (inside `async-hid`), and opens `/dev/hidrawN` in `lock.rs` after checking `hidraw` + ASCII digits (`hidraw_node`). FreeBSD reads `/dev` (`hidraw_boards`) and opens `/dev/hidraw*` (`node_device`) |
+| Locking on Linux (`src/lock.rs`) | `flock(LOCK_EX \| LOCK_NB)` on `/dev/hidrawN` via `rustix::fs::flock`. After locking, `take_stable` (`src/lock.rs`) re-reads `hidraw_node_of(&device)` to guard against udev renumbering while waiting (bounded by `NODE_ROUNDS = 3` and the total `wait` budget) |
+| Locking & reset waiting on macOS (`Seize`, `src/device.rs`) | `Access::Exclusive` (`kIOHIDOptionsTypeSeizeDevice` in the pinned `async-hid` fork). `Seize` keeps polling across a brief disappearance while the board resets (`--reset` / `reset`), bounded by the wall-clock `wait` deadline in `lock::wait_for` |
+| Locking & reset waiting on FreeBSD (`NodeWait`, `src/device.rs`) | `hidraw(4)` allows one open at a time. When a target board is held (`EBUSY`), `NodeWait` records its `(serial, node)` and on subsequent 10 ms polls calls `node_device` on that single `/dev/hidrawN` node only, avoiding `EBUSY` interference with other HID devices on the host and avoiding repeated `/sbin/sysctl` spawns during the wait |
+| Terminal & CLI output (`src/sanitize.rs`, `src/main.rs`) | `sanitize()` permits only `0x20..=0x7E` and `U+FFFD`. Applied to USB serial numbers on all platforms (including Linux sysfs `serial` in `detached_interfaces` and FreeBSD `sernum` in `ykush3_serial`) and to `argv` items before putting them into `Error::Usage` |
+| `unsafe` and panics | Zero `unsafe` in `src/` and `tests/`. No reachable panics in production code (the `unreachable!` in `src/main.rs` is guarded by `run()` handling `Help`, `Version` and `List`; the `expect` in `src/fake.rs` is behind `#[cfg(any(test, feature = "fake"))]`) |
+| Test suite | see the checks below; `09fadd5` itself had 173 tests according to its README |
 
 ### Observations below the reporting bar (2026-11-07)
 
 - **B-ykush-1: Linux `detached_interfaces` does not sanitise the interface directory name.**
-  *Fixed:* `detached_interfaces` (`src/device.rs:586`) now passes each matched directory name
+  *Fixed:* `detached_interfaces` now passes each matched directory name
   through `sanitize()` before `detached_message` formats it into the `stderr` / `Error::Unavailable`
   hint.
 - **B-ykush-2: FreeBSD `hidraw_boards` checks `starts_with("hidraw")` rather than digits.**
-  *Fixed:* `is_hidraw_name` (`src/device.rs:731`) requires `hidraw` followed by one or more ASCII
+  *Fixed:* `is_hidraw_name` requires `hidraw` followed by one or more ASCII
   digits on both Linux (`hidraw_node`) and FreeBSD (`hidraw_boards`).
 - **B-ykush-3: Residual resync ambiguity on legacy firmware (`< 1.1.0`) or back-to-back version queries.**
-  During `resync` (`src/ykush3.rs:483-534`), `accept` accepts either `[0x01, 0x61, _, _]` or an
-  all-zero 64 byte report (`r.iter().all(|&b| b == 0)` for bootloader/firmware `< 1.1.0`) and
-  then requires 50 ms of quiet. If a stalled exchange left an answer arriving *after* the 50 ms
+  `resync` (`src/device.rs`) takes either a 64 byte report starting `0x01 0x61` or an all-zero
+  one (for firmware `< 1.1.0`) as the answer and then requires 50 ms of quiet. If a stalled exchange left an answer arriving *after* the 50 ms
   quiet window, that late answer will be read by the next command; commands that check an echoed
   opcode reject it (exit 76), except switching/config commands if the late answer happens to
-  start with `0x01`, or a `-f` / `--firmware-version` query if the late answer was itself a
+  start with `0x01`, or a `--firmware-version` query if the late answer was itself a
   firmware version reply. Documented in `SECURITY.md` under known limitations.
 - **B-ykush-4: Disconnect error mapping on Linux (`ENODEV` -> exit 74 vs exit 69).**
-  *Fixed:* `Error::from(HidError)` (`src/error.rs:129-148`) now maps `ENODEV` (`19`) inside
+  *Fixed:* `Error::from(HidError)` now maps `ENODEV` (`19`) inside
   `HidError::Other` to `Error::Unavailable` (exit 69), matching `NotConnected` and `Disconnected`.
 - **B-ykush-5: `src/help.rs:72` still states the pre-0.5.0 exit status.**
   *Fixed:* `src/help.rs:72` now describes the `sysexits(3)` exit status (`64` to `77`).
@@ -301,18 +322,18 @@ reporting bar applies specifically to `ykush-rs`'s Linux detached-interface diag
   `async-hid` fork branch pin (`1d1a2bf4` until upstream `0.6.0` with `#55` is released) remains
   open.
 
-### Checked against SECURITY.md (`09fadd5`)
+### Checked against SECURITY.md (after the fixes)
 
 | Statement in `SECURITY.md` | Assessment |
 |---|---|
 | Answers from the board are untrusted and checked against the request | Matches `src/ykush3.rs` and the 4000-round sweep test |
-| Every read and write gives up after 5 seconds (macOS in-process timer; Linux/FreeBSD write bounded by kernel USB transfer) | Matches `src/device.rs:20-34` and `src/device.rs:231-285` |
+| Every read and write gives up after 5 seconds (macOS in-process timer; Linux/FreeBSD write bounded by kernel USB transfer) | Matches `TIMEOUT` and the `Link` implementation in `src/device.rs` |
 | Serial numbers and `argv` sanitised before reaching the terminal | Matches `src/sanitize.rs` and all call sites in `src/device.rs`, `src/cli.rs`, `src/main.rs` |
 | macOS exclusive open; Linux advisory `flock` on `/dev/hidrawN` (does not coordinate with `ykushcmd`); FreeBSD single-open `hidraw` + `sysctl` discovery + single-node polling while waiting | Matches `src/device.rs` and `src/lock.rs` |
 | Known limitations: duplicate serial numbers merged (`LOW L3`), resync via firmware version query + 50 ms quiet window | Accurately documented in `SECURITY.md` |
 
 ## Scope
 
-A snapshot of the commits named above (`26e550e`, `2026-11-02`, and `09fadd5` on `2026-11-07`).
-Changes made afterwards are not covered. A review with no finding above LOW is no proof of
+A snapshot of the states named above: `26e550e`, `2026-11-02`, and for `2026-11-07` `09fadd5` with
+the fixes the addendum lists. Changes made afterwards are not covered. A review with no finding above LOW is no proof of
 correctness - it says that nothing more was found in the categories examined.

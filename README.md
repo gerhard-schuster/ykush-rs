@@ -134,7 +134,7 @@ it, and `-l` lists it.
 
 The **switches** are compatible with the original, and a leading `ykush3` is accepted and
 ignored so existing invocations keep working. What the original tolerated silently - a
-stray first word, a second `-s` - is an error here; the
+stray first word, a second `-s`, an unknown option before the command - is an error here; the
 [differences table](#where-it-differs-from-the-c-original) has the full list:
 
 ```
@@ -179,10 +179,10 @@ are a stable interface, the wording of the messages is not.
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `0` | success; also `-l` with no board attached | go on |
+| `0` | success; also `-l` with no board attached, and a reader of the output that closed the pipe early (`\| head -n 1`) | go on |
 | `64` | invalid command line | correct the call |
 | `69` | no board, unknown serial number, the board gone, HID driver detached, no hidraw node, a node that keeps changing, the HID stack cannot list devices; **the board refused the command**: status `0x00`, or an I2C transfer failed | stop, check the board and its connection |
-| `74` | no answer within the timeout, a truncated report, a transport error, output failed | retry if the command may be repeated |
+| `74` | no answer within the timeout, a truncated report, a transport error, output failed other than by a closed pipe | retry if the command may be repeated |
 | `75` | the board is in use (waited 5 seconds, or `--no-wait`) | retry later |
 | `76` | an answer that does not fit the request: wrong echo, unknown status, wrong length | retry if the command may be repeated; if it recurs, check the board |
 | `77` | access denied (on Linux the udev rule is missing) | fix the setup |
@@ -507,8 +507,8 @@ command line application.
 ## Tests
 
 ```
-cargo test                                    # 174 tests and a doctest, no
-                                              # hardware needed (179 on Linux)
+cargo test                                    # 176 tests and a doctest, no
+                                              # hardware needed (181 on Linux)
 cargo test -- --ignored --test-threads=1      # 11 more: 9 need a board, 2 only
                                               # the HID stack of the system;
                                               # on Linux 3 more that need a board
@@ -527,13 +527,13 @@ into the five second limit.
 |---|---|---|
 | `cli` | 36 | grammar, board selection, `--no-wait`, every command, every error message |
 | `ykush3` | 40 | the bytes each command sends, reading answers, error paths, a swept and a hand-picked pass over generated answers |
-| `main` | 17 | output format, dispatch of every command, program name |
+| `main` | 18 | output format, dispatch of every command, program name |
 | `error`, `help`, `device`, `sanitize` | 47 | error texts, exit codes, help output, report padding, waiting for a busy or re-enumerating board on macOS and FreeBSD against fakes, the Linux permission and driver diagnostics, the hidraw node from sysfs, the character filter |
 | `lock` | 16, on Linux 21 | two invocations hold the board one after the other, waiting runs out at the limit, `--no-wait` makes one attempt, a failed command lets go, a board gone for a moment is waited for, a node that moves while it is locked is let go; on Linux the same against a real `flock` on a temporary file |
-| `tests/cli.rs` | 12 | the built binary: exit codes, stdout versus stderr, manual page |
+| `tests/cli.rs` | 13 | the built binary: exit codes, stdout versus stderr, a closed pipe, manual page |
 | `tests/encoding.rs` | 6 | every file is valid UTF-8 within Latin-1, and the rule itself |
 | doctest | 1 | the library example compiles; `no_run`, since it needs a board |
-| **running without hardware** | **174 + 1**, on Linux **179 + 1** | |
+| **running without hardware** | **176 + 1**, on Linux **181 + 1** | |
 | `--ignored`, needs a board | 9, on Linux 12 | opening and real exchanges, the acknowledged switch, the echoed pin and port, 2000 status reads on one handle, a second open of a held board refused as busy; on Linux the built binary against a lock held by another process, with and without `--no-wait` |
 | `--ignored`, needs only the HID stack | 2 | enumeration when nothing is attached |
 
@@ -549,19 +549,21 @@ with no answer prepared fails the test as soon as anything reads from it, which 
 
 ### Coverage
 
-Line coverage with `-C instrument-coverage`, measured on 2026-10-31 on macOS on Apple silicon
-at commit 83c3327, before the exclusive open on macOS. The Linux-only code is not compiled
-there and not counted.
+Line coverage with `-C instrument-coverage`, measured on macOS on Apple silicon: on 2026-10-31
+at commit 83c3327, before the exclusive open on macOS, and on 2026-11-09 on the code of the
+commit that adds that row, with Rust 1.99.0. The Linux-only code is not compiled there and not
+counted. The runs count different totals, so their percentages do not compare directly.
 
 | Run | Lines | Missed |
 |---|---|---|
-| `cargo test` only, no board needed (2026-11-07, after the exclusive open, resync, and FreeBSD/reset-wait fake tests) | 91.37 % | 246 of 2849 |
+| `cargo test` only, no board needed (2026-11-09) | 91.38 % | 247 of 2864 |
 | `cargo test` only, no board needed (2026-10-31 at 83c3327) | 90.36 % | 215 of 2231 |
 | `cargo test` and the hardware run, board `Y3N13808` on firmware 1.5.0 attached (2026-10-31 at 83c3327) | 96.91 % | 69 of 2231 |
 
-`cli.rs`, `error.rs`, `fake.rs` and `sanitize.rs` are at 100 % in both runs. Without a board
-most missed lines are in `device.rs` (143), the transport that needs a device. With the board,
-what stays unreached is:
+`cli.rs`, `fake.rs` and `sanitize.rs` are at 100 % in all three runs; `error.rs` was at 100 % at
+83c3327 and has 2 unreached lines on 2026-11-09. Without a board most missed lines are in
+`device.rs` (143 at 83c3327, 170 on 2026-11-09), the transport that needs a device. With the
+board, at 83c3327, what stays unreached is:
 
 | Place | Why it is not reached |
 |---|---|
@@ -734,6 +736,7 @@ without access to the node, a call exits `77` at once.
 | `-s` after the command | is ignored | works wherever it appears |
 | `-s` given twice | the last one wins silently | rejected as ambiguous |
 | a stray first word (`ykushcmd foo -u 1`) | silently skipped | rejected with a message |
+| an unknown option before the command (`-x -u 1`) | silently skipped, the command runs | rejected, exit `64`; the command does not run |
 | the external port | `4` for switching, `e` for configuring | both spellings everywhere |
 | I2C error status | only `0x00`/`0x01` told apart, otherwise a silent `0` | `0x02` and `0x03` are reported in words |
 | a command the board rejects | still exits with `0`, the answer is never read | the ACK is checked, exit `69`; an answer that does not fit, `76` |

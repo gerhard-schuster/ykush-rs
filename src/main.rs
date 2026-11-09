@@ -420,6 +420,17 @@ mod tests {
         assert!(err.is_empty());
     }
 
+    #[test]
+    fn another_output_error_is_reported_with_its_exit_code() {
+        let failed = Error::Io(io::Error::other("disk full"));
+        let mut err = Vec::new();
+        assert_eq!(
+            finish("ykushctrl", Err(failed), &mut err),
+            ExitCode::from(74)
+        );
+        assert!(String::from_utf8(err).unwrap().contains("disk full"));
+    }
+
     /// Needs a YKUSH3 attached.
     /// Run with `cargo test -- --ignored --test-threads=1`.
     #[test]

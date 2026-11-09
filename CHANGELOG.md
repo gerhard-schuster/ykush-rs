@@ -15,9 +15,19 @@ program has open is found through `sysctl`.
 
 ### Changed
 
-- The minimum supported Rust is 1.98, up from 1.86: the first version with a
-  standard library published for `aarch64-unknown-freebsd`, so CI can check all
-  three systems with it.
+- **Incompatible:** the minimum supported Rust is 1.98, up from 1.86: the first
+  version with a standard library published for `aarch64-unknown-freebsd`, so CI
+  can check all three systems with it.
+- **Incompatible:** an unknown option before the command is an error with exit
+  `64`; it used to be skipped and the command ran. A script with `-x -u 1` now
+  fails without switching the port.
+- **Incompatible:** a reader of the output that closes the pipe early ends with
+  `0` and no message instead of `74`, so `ykushctrl -g a | head -n 1` is not a
+  failure. Other output errors stay `74`.
+- **Incompatible, library:** `Port::Downstream(u8)` is replaced by
+  `Port::Downstream1` to `Port::Downstream3`, so a port number out of range
+  cannot be constructed, and `read_io` and `write_io` take a `Gpio` instead of
+  a `u8`. Code using the old forms no longer compiles.
 - **Incompatible:** the exit status tells what to do next instead of being
   `1` for every error, after sysexits(3): `64` invalid command line, `69` no
   board, board unreachable or the board refused the command, `74` no answer
@@ -40,8 +50,9 @@ program has open is found through `sysctl`.
   board it supports is still the YKUSH3 only. The udev rule file is
   `60-ykush.rules`.
 - A board unplugged after it was opened ends with `69` like one that is
-  not there (`NotConnected`, `Disconnected`, or `ENODEV` on Linux), instead
-  of `74`, which asked for a retry.
+  not there (`NotConnected`, `Disconnected`, `ENODEV` on Linux, or `ENXIO` on
+  FreeBSD, the latter from the FreeBSD 15.1 source, not measured), instead of
+  `74`, which asked for a retry.
 - A waiting invocation keeps waiting while the board comes back from a reset
   by the program that held it, on macOS and FreeBSD; before, it gave up with
   "not found" as soon as the board was gone. Measured on a Mac: 10 of 10
@@ -57,6 +68,10 @@ program has open is found through `sysctl`.
 
 ### Added
 
+- `-g a` prints the state of the three downstream ports, and a manual page is
+  in `man/ykushctrl.1`.
+- Library: `Gpio`, `Port::DOWNSTREAM`, `Port::ports()` and `FakeBoard::then`.
+- `#![forbid(unsafe_code)]` in both crate roots.
 - Linux on aarch64 is a supported target. The transport needs no change: the
   pinned `async-hid` revision drives the board through hidraw, finds it by
   reading `/sys`, and needs neither `libudev` nor `pkg-config` to build. The

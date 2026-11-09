@@ -1,5 +1,5 @@
 .\" SPDX-License-Identifier: Apache-2.0
-.Dd November 7, 2026
+.Dd November 9, 2026
 .Dt YKUSHCTRL 1
 .Os
 .Sh NAME
@@ -168,7 +168,8 @@ The exit status follows
 .It Cm 0
 Success; also
 .Fl l
-when no board is attached.
+when no board is attached, and when the reader of standard output closed the
+pipe early.
 .It Cm 64
 Invalid command line.
 .It Cm 69
@@ -176,7 +177,8 @@ No board found, unknown serial number, board disconnected, HID driver
 detached, or the board rejected the command.
 .It Cm 74
 No answer within the five second timeout, a truncated report, a transport
-error, or writing to standard output failed.
+error, or writing to standard output failed for another reason than a closed
+pipe.
 .It Cm 75
 The board is in use by another process (after waiting five seconds, or at once
 with

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Command line parsing.
 //!
-//! The grammar of the C++ application is kept as it is: a token starting with a
-//! dash opens an option, every following token that does not start with a dash
-//! is a parameter of that option. Options such as `-on` or `-off` are therefore
-//! single options and not a group of short flags.
+//! The grammar of the C++ application is kept: a token starting with a dash
+//! opens an option, every following token that does not start with a dash is a
+//! parameter of that option. Options such as `-on` or `-off` are therefore
+//! single options and not a group of short flags. Unlike there, an unknown
+//! option before the command is an error rather than skipped; the first option
+//! that is not a modifier is taken as the command.
 //!
 //! Parsing produces an [`Invocation`] and touches no hardware, so the whole
 //! command line surface can be tested on its own.
@@ -376,6 +378,11 @@ mod tests {
     #[test]
     fn an_unknown_option_is_rejected() {
         assert_eq!(usage_error("-x"), "Unknown option -x");
+        // Not skipped to reach a command further on, as the C++ application does.
+        assert_eq!(usage_error("-x -v"), "Unknown option -x");
+        assert_eq!(usage_error("--bogus -h"), "Unknown option --bogus");
+        assert_eq!(usage_error("-x --no-wait -v"), "Unknown option -x");
+        assert_eq!(usage_error("-x -u 1"), "Unknown option -x");
     }
 
     #[test]
