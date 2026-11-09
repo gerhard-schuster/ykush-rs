@@ -322,9 +322,9 @@ findings above; they record the state the correction was made on.
   `async-hid` fork branch pin (`1d1a2bf4` until upstream `0.6.0` with `#55` is released) remains
   open.
 
-### Checked against SECURITY.md (after the fixes)
+### Security properties checked (after the fixes)
 
-| Statement in `SECURITY.md` | Assessment |
+| Property | Assessment |
 |---|---|
 | Answers from the board are untrusted and checked against the request | Matches `src/ykush3.rs` and the 4000-round sweep test |
 | Every read gives up after 5 seconds, and so does every write on macOS (in-process timer); on Linux and FreeBSD the kernel bounds the write | Matches `TIMEOUT` and the `Link` implementation in `src/device.rs` |
