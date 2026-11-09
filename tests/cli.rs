@@ -23,6 +23,20 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
+fn a_reader_that_closed_the_pipe_is_not_an_error() {
+    let (reader, writer) = std::io::pipe().expect("a pipe");
+    drop(reader);
+    let output = Command::new(env!("CARGO_BIN_EXE_ykushctrl"))
+        .arg("-h")
+        .stdout(writer)
+        .output()
+        .expect("the binary should run");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn without_arguments_the_help_goes_to_stdout_and_succeeds() {
     let output = run(&[]);
 
@@ -132,6 +146,50 @@ fn no_wait_with_a_value_is_a_usage_error() {
     assert_eq!(output.status.code(), Some(64));
     assert!(stderr(&output).contains("Option --no-wait takes no value"));
     assert!(stderr(&output).contains("Usage:"));
+}
+
+#[test]
+fn the_manual_page_covers_every_option_and_exit_code() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("man/ykushctrl.1");
+    let man = std::fs::read_to_string(&path).expect("man/ykushctrl.1 should be readable");
+
+    for needle in [
+        ".Dt YKUSHCTRL 1",
+        ".It Fl u Ar PORT",
+        ".It Fl d Ar PORT",
+        ".It Fl g Ar PORT",
+        ".It Fl on",
+        ".It Fl off",
+        ".It Fl c Ar PORT Ar STATE",
+        ".It Fl r Ar PIN",
+        ".It Fl w Ar PIN Ar LEVEL",
+        ".It Fl -gpio Cm enable | disable",
+        ".It Fl -i2c-slave Cm enable | disable",
+        ".It Fl -i2c-master Cm enable | disable",
+        ".It Fl -i2c-set-address Ar ADDR",
+        ".It Fl -i2c-write Ar ADDR Ar BYTE ...",
+        ".It Fl -i2c-read Ar ADDR Ar COUNT",
+        ".It Fl l",
+        ".It Fl s Ar SERIAL",
+        ".It Fl -no-wait",
+        ".It Fl -firmware-version",
+        ".It Fl -bootloader-version",
+        ".It Fl -reset",
+        ".It Fl -boot",
+        ".It Fl v , Fl -version",
+        ".It Fl h , Fl -help",
+        ".It Cm 64",
+        ".It Cm 69",
+        ".It Cm 74",
+        ".It Cm 75",
+        ".It Cm 76",
+        ".It Cm 77",
+    ] {
+        assert!(
+            man.contains(needle),
+            "man/ykushctrl.1 is missing {needle:?}"
+        );
+    }
 }
 
 /// Another process holding the board's lock, the way a second invocation

@@ -30,7 +30,7 @@ downstream port at once.
 
   -u PORT            power the port up            PORT = 1|2|3|4|a
   -d PORT            power the port down          PORT = 1|2|3|4|a
-  -g PORT            report whether it is on      PORT = 1|2|3|4
+  -g PORT            report whether it is on      PORT = 1|2|3|4|a
   -on                shorthand for -u 4
   -off               shorthand for -d 4
   -c PORT STATE      what the port does after a reset or a power cut:
@@ -69,7 +69,7 @@ Board.
   -v, --version      print the version of this program
   -h, --help         print this text
 
-Exit status is 0 when the command went through and 1 when it did not.
+Exit status: 0 on success, or a sysexits(3) code (64 to 77) saying what to do next.
 "
     )?;
     Ok(())

@@ -12,8 +12,8 @@
 //!
 //! # fn main() -> ykush::Result<()> {
 //! let board = Ykush3::open(None)?;
-//! board.port_down(Port::Downstream(2))?;
-//! println!("{}", board.port_status(Port::Downstream(2))?);
+//! board.port_down(Port::Downstream2)?;
+//! println!("{}", board.port_status(Port::Downstream2)?);
 //! # Ok(())
 //! # }
 //! ```
@@ -22,6 +22,8 @@
 //! `fake` feature, `fake::FakeBoard` stands in for a board, answers from a
 //! prepared queue and records what would have been sent. The feature is off
 //! by default, so the plain library carries no test gear.
+
+#![forbid(unsafe_code)]
 
 // Built and run against a board on macOS on Apple silicon and on Linux and
 // FreeBSD on aarch64; anywhere else it refuses to compile rather than produce
@@ -48,4 +50,4 @@ pub use crate::device::{
 pub use crate::error::{Error, Result};
 pub use crate::lock::DEFAULT_WAIT;
 pub use crate::sanitize::sanitize;
-pub use crate::ykush3::{Port, PortStatus, PowerOnState, Version, Ykush3, I2C_MAX_BYTES};
+pub use crate::ykush3::{Gpio, Port, PortStatus, PowerOnState, Version, Ykush3, I2C_MAX_BYTES};

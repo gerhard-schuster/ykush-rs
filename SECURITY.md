@@ -29,7 +29,10 @@ program:
 - denial of service by a board that stops answering: every read gives up
   after five seconds, and so does every write on macOS; on Linux the write
   runs inside the kernel, whose USB timeout bounds it rather than this
-  program
+  program, and on FreeBSD too, which waits at most five seconds for an
+  interrupt OUT transfer and can return before the board took the report
+  (FreeBSD 15.1 source, not measured; whether the board has that endpoint
+  was not checked)
 - denial of service by holding the device open; on Linux an invocation of
   this program waits at most five seconds for the lock described below and
   then gives up, and on macOS another program that seizes the device makes
@@ -105,4 +108,5 @@ transport, and is kept as the record of that state. Note who wrote them: the
 author of the code, not an outside party. They are a record of what was
 examined, not an independent audit. The review of the sister project
 ykur-rs on 2026-11-02 found the same exchange in this program; the addendum
-of 2026-11-02 in SECURITY-REVIEW-0.4.0.md says what changed here.
+of 2026-11-02 in SECURITY-REVIEW-0.4.0.md says what changed here. Its addendum
+of 2026-11-07, corrected on 2026-11-09, covers the Linux and FreeBSD support.
