@@ -132,10 +132,11 @@ impl From<async_hid::HidError> for Error {
     /// after it was opened as `ENODEV` (19), and a missing udev rule as
     /// `EACCES` (`PermissionDenied`). On FreeBSD a call inside the driver gets
     /// `EIO`, which the transport reports as `Disconnected`, and any later one
-    /// `ENXIO` (6): `hidraw_detach` calls `destroy_dev`, and from then on
-    /// `devfs_fp_check` answers with it (`sys/dev/hid/hidraw.c`,
-    /// `sys/fs/devfs/devfs_vnops.c`, releng/15.1; read in the source, not
-    /// measured with a board).
+    /// `ENXIO` (6): `hidraw_detach` calls `destroy_dev`, from then on
+    /// `devfs_read_f` and `devfs_write_f` fall back to the vnode, and
+    /// `dead_read` and `dead_write` answer with it (`sys/dev/hid/hidraw.c`,
+    /// `sys/fs/devfs/devfs_vnops.c`, `sys/fs/deadfs/dead_vnops.c`, releng/15.1;
+    /// read in the source, not measured with a board).
     fn from(e: async_hid::HidError) -> Self {
         const ENODEV: i32 = 19;
         const ENXIO: i32 = 6;

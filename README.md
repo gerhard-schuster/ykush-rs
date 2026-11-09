@@ -204,7 +204,8 @@ for the queue to stay quiet, since the answer may itself have been left behind. 
 1.1.0 answers the version query with an empty report, which is handled the same way. An answer
 left behind by an invocation that was killed between asking and reading is not taken for the
 answer to this one. Every read gives up after 5 seconds, and so does every write on
-macOS; on Linux the write runs inside the kernel, whose USB timeout bounds it.
+macOS; on Linux the write runs inside the kernel, whose USB timeout bounds it, and on FreeBSD
+too, where the USB transfer times out after 5 seconds (FreeBSD 15.1 source, not measured).
 
 sysexits(3) has no code for a device that refuses a command. A refusal is a valid answer, not
 a protocol violation (`76`), so it gets the catch-all `69`. `77` is meant for permissions
@@ -507,8 +508,8 @@ command line application.
 ## Tests
 
 ```
-cargo test                                    # 176 tests and a doctest, no
-                                              # hardware needed (181 on Linux)
+cargo test                                    # 177 tests and a doctest, no
+                                              # hardware needed (182 on Linux)
 cargo test -- --ignored --test-threads=1      # 11 more: 9 need a board, 2 only
                                               # the HID stack of the system;
                                               # on Linux 3 more that need a board
@@ -528,12 +529,12 @@ into the five second limit.
 | `cli` | 36 | grammar, board selection, `--no-wait`, every command, every error message |
 | `ykush3` | 40 | the bytes each command sends, reading answers, error paths, a swept and a hand-picked pass over generated answers |
 | `main` | 18 | output format, dispatch of every command, program name |
-| `error`, `help`, `device`, `sanitize` | 47 | error texts, exit codes, help output, report padding, waiting for a busy or re-enumerating board on macOS and FreeBSD against fakes, the Linux permission and driver diagnostics, the hidraw node from sysfs, the character filter |
+| `error`, `help`, `device`, `sanitize` | 48 | error texts, exit codes, help output, report padding, waiting for a busy or re-enumerating board on macOS and FreeBSD against fakes, the Linux permission and driver diagnostics, the hidraw node from sysfs, the character filter |
 | `lock` | 16, on Linux 21 | two invocations hold the board one after the other, waiting runs out at the limit, `--no-wait` makes one attempt, a failed command lets go, a board gone for a moment is waited for, a node that moves while it is locked is let go; on Linux the same against a real `flock` on a temporary file |
 | `tests/cli.rs` | 13 | the built binary: exit codes, stdout versus stderr, a closed pipe, manual page |
 | `tests/encoding.rs` | 6 | every file is valid UTF-8 within Latin-1, and the rule itself |
 | doctest | 1 | the library example compiles; `no_run`, since it needs a board |
-| **running without hardware** | **176 + 1**, on Linux **181 + 1** | |
+| **running without hardware** | **177 + 1**, on Linux **182 + 1** | |
 | `--ignored`, needs a board | 9, on Linux 12 | opening and real exchanges, the acknowledged switch, the echoed pin and port, 2000 status reads on one handle, a second open of a held board refused as busy; on Linux the built binary against a lock held by another process, with and without `--no-wait` |
 | `--ignored`, needs only the HID stack | 2 | enumeration when nothing is attached |
 
@@ -556,7 +557,7 @@ counted. The runs count different totals, so their percentages do not compare di
 
 | Run | Lines | Missed |
 |---|---|---|
-| `cargo test` only, no board needed (2026-11-09) | 91.38 % | 247 of 2864 |
+| `cargo test` only, no board needed (2026-11-09) | 91.40 % | 247 of 2871 |
 | `cargo test` only, no board needed (2026-10-31 at 83c3327) | 90.36 % | 215 of 2231 |
 | `cargo test` and the hardware run, board `Y3N13808` on firmware 1.5.0 attached (2026-10-31 at 83c3327) | 96.91 % | 69 of 2231 |
 

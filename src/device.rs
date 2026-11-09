@@ -1180,6 +1180,16 @@ mod tests {
     }
 
     #[test]
+    fn the_name_of_a_detached_interface_is_sanitised() {
+        let sysfs = FakeSysfs::new("escape");
+        sysfs
+            .device("1-1.4.4", "04d8", "f11b", "Y3N13808")
+            .interface("1-1.4.4:1.0\u{1b}[31m", "03", false);
+
+        assert_eq!(detached_interfaces(&sysfs.0, None), ["1-1.4.4:1.0?[31m"]);
+    }
+
+    #[test]
     fn every_detached_board_is_named() {
         let sysfs = FakeSysfs::new("two");
         sysfs

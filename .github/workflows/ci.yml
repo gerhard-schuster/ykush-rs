@@ -26,7 +26,9 @@ env:
 # Checkouts do not persist credentials: the jobs run code from the checkout
 # (build scripts, tests), which must not find a token lying in .git/config.
 #
-# Every job runs on both supported systems. The Linux runner is arm64 because
+# Every job runs on macOS and on Linux. FreeBSD, the third supported system, has
+# no runner here: lint and minimum-supported-rust check its target, but its
+# tests do not run in CI. The Linux runner is arm64 because
 # the source compiles for Linux on aarch64 only; ubuntu-latest is x86_64 and
 # would stop at the compile_error! in src/lib.rs.
 

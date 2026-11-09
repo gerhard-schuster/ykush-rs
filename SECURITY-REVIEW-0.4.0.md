@@ -76,7 +76,7 @@ Unchanged in substance from the earlier review, and re-checked against the curre
   which the earlier transport could not distinguish
 - the one length the device controls is now *rejected* when it exceeds the request rather
   than clamped: `i2c_read` refuses a reported count above the requested one, and the slice
-  `resp[3..3 + reported]` has 63 as its highest index in a 64 byte buffer
+  `resp[3..3 + reported]` has 62 as its highest index in a 64 byte buffer
 - every other access to an answer is at a constant index inside the buffer
 
 ## Findings
@@ -269,7 +269,7 @@ findings above; they record the state the correction was made on.
 
 | Command | Exit | Result |
 |---|---|---|
-| `cargo test --all-features --locked` | 0 | 176 tests and a doctest pass, 11 ignored |
+| `cargo test --all-features --locked` | 0 | 177 tests and a doctest pass, 11 ignored |
 | `cargo clippy --all-targets --all-features --locked -- -D warnings` | 0 | no warning |
 | the same without `--all-features`, with `--target aarch64-unknown-linux-gnu` | 0 | no warning |
 | `cargo +1.98 check --all-targets --locked` | 0 | builds |
@@ -282,7 +282,7 @@ findings above; they record the state the correction was made on.
 
 | Area | What was found |
 |---|---|
-| Parsing the answers (`src/ykush3.rs`) | Fixed 64 byte `Report`, freshly zeroed per exchange; short reads rejected; `i2c_write` bounds `data.len() <= 60` (`I2C_MAX_BYTES`) so `req[4..4 + data.len()]` fits inside 64 bytes; `i2c_read` bounds `len <= 60` and checks `reported <= usize::from(len)` before slicing `resp[3..3 + reported]` (highest index 63); all other reads use constant indices `0..=4`. Every command validates echoed opcode/port/pin except switching/config commands where pre-1.1.0 firmware answers with `0x01` only, covered by the version-query resync (`0x61 0x02`) + 50 ms quiet window |
+| Parsing the answers (`src/ykush3.rs`) | Fixed 64 byte `Report`, freshly zeroed per exchange; short reads rejected; `i2c_write` bounds `data.len() <= 60` (`I2C_MAX_BYTES`) so `req[4..4 + data.len()]` fits inside 64 bytes; `i2c_read` bounds `len <= 60` and checks `reported <= usize::from(len)` before slicing `resp[3..3 + reported]` (highest index 62); all other reads use constant indices `0..=4`. Every command validates echoed opcode/port/pin except switching/config commands where pre-1.1.0 firmware answers with `0x01` only, covered by the version-query resync (`0x61 0x02`) + 50 ms quiet window |
 | Command execution (`src/device.rs`) | FreeBSD only: `/sbin/sysctl` is invoked via `Command::new("/sbin/sysctl").args(["-n", &name])` during enumeration (the `sysctl` closure in `hidraw_boards`). No shell is invoked; the binary path is fixed; `-n` precedes the key argument |
 | File system & `/sys`, `/dev` access (`src/device.rs`, `src/lock.rs`) | Linux reads `/sys/bus/usb/devices` (`detached_interfaces`) and `/sys/class/hidraw/*/device/uevent` (inside `async-hid`), and opens `/dev/hidrawN` in `lock.rs` after checking `hidraw` + ASCII digits (`hidraw_node`). FreeBSD reads `/dev` (`hidraw_boards`) and opens `/dev/hidraw*` (`node_device`) |
 | Locking on Linux (`src/lock.rs`) | `flock(LOCK_EX \| LOCK_NB)` on `/dev/hidrawN` via `rustix::fs::flock`. After locking, `take_stable` (`src/lock.rs`) re-reads `hidraw_node_of(&device)` to guard against udev renumbering while waiting (bounded by `NODE_ROUNDS = 3` and the total `wait` budget) |
@@ -290,7 +290,7 @@ findings above; they record the state the correction was made on.
 | Locking & reset waiting on FreeBSD (`NodeWait`, `src/device.rs`) | `hidraw(4)` allows one open at a time. When a target board is held (`EBUSY`), `NodeWait` records its `(serial, node)` and on subsequent 10 ms polls calls `node_device` on that single `/dev/hidrawN` node only, avoiding `EBUSY` interference with other HID devices on the host and avoiding repeated `/sbin/sysctl` spawns during the wait |
 | Terminal & CLI output (`src/sanitize.rs`, `src/main.rs`) | `sanitize()` permits only `0x20..=0x7E` and `U+FFFD`. Applied to USB serial numbers on all platforms (including Linux sysfs `serial` in `detached_interfaces` and FreeBSD `sernum` in `ykush3_serial`) and to `argv` items before putting them into `Error::Usage` |
 | `unsafe` and panics | Zero `unsafe` in `src/` and `tests/`. No reachable panics in production code (the `unreachable!` in `src/main.rs` is guarded by `run()` handling `Help`, `Version` and `List`; the `expect` in `src/fake.rs` is behind `#[cfg(any(test, feature = "fake"))]`) |
-| Test suite | see the checks below; `09fadd5` itself had 173 tests according to its README |
+| Test suite | see the checks above; `09fadd5` itself had 173 tests according to its README |
 
 ### Observations below the reporting bar (2026-11-07)
 
@@ -311,8 +311,8 @@ findings above; they record the state the correction was made on.
 - **B-ykush-4: Disconnect error mapping on Linux (`ENODEV` -> exit 74 vs exit 69).**
   *Fixed:* `Error::from(HidError)` now maps `ENODEV` (`19`) inside
   `HidError::Other` to `Error::Unavailable` (exit 69), matching `NotConnected` and `Disconnected`.
-- **B-ykush-5: `src/help.rs:72` still states the pre-0.5.0 exit status.**
-  *Fixed:* `src/help.rs:72` now describes the `sysexits(3)` exit status (`64` to `77`).
+- **B-ykush-5: `src/help.rs` still states the exit status from before the `sysexits(3)` codes.**
+  *Fixed:* `src/help.rs` now describes the `sysexits(3)` exit status (`64` to `77`).
 - **B-ykush-6: No `#![forbid(unsafe_code)]` and CI/supply-chain hygiene.**
   *Fixed except git-pin availability:* `src/lib.rs` and `src/main.rs` now set
   `#![forbid(unsafe_code)]`; `audit.yml` runs `cargo deny` on `pull_request` as well as `push`
@@ -330,10 +330,10 @@ findings above; they record the state the correction was made on.
 | Every read and write gives up after 5 seconds (macOS in-process timer; Linux/FreeBSD write bounded by kernel USB transfer) | Matches `TIMEOUT` and the `Link` implementation in `src/device.rs` |
 | Serial numbers and `argv` sanitised before reaching the terminal | Matches `src/sanitize.rs` and all call sites in `src/device.rs`, `src/cli.rs`, `src/main.rs` |
 | macOS exclusive open; Linux advisory `flock` on `/dev/hidrawN` (does not coordinate with `ykushcmd`); FreeBSD single-open `hidraw` + `sysctl` discovery + single-node polling while waiting | Matches `src/device.rs` and `src/lock.rs` |
-| Known limitations: duplicate serial numbers merged (`LOW L3`), resync via firmware version query + 50 ms quiet window | Accurately documented in `SECURITY.md` |
+| Known limitations: duplicate serial numbers merged, resync via firmware version query + 50 ms quiet window | Accurately documented in `SECURITY.md` |
 
 ## Scope
 
-A snapshot of the states named above: `26e550e`, `2026-11-02`, and for `2026-11-07` `09fadd5` with
-the fixes the addendum lists. Changes made afterwards are not covered. A review with no finding above LOW is no proof of
+A snapshot of the states named above: `26e550e`, the addendum of 2026-11-02, whose commit it does
+not name (UNKNOWN), and for 2026-11-07 `09fadd5` with the fixes the addendum lists. Changes made afterwards are not covered. A review with no finding above LOW is no proof of
 correctness - it says that nothing more was found in the categories examined.
