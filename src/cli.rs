@@ -378,7 +378,8 @@ mod tests {
     #[test]
     fn an_unknown_option_is_rejected() {
         assert_eq!(usage_error("-x"), "Unknown option -x");
-        // Not skipped to reach a command further on, as the C++ application does.
+        // Not skipped to reach a command further on, as the C++ application
+        // does after `ykush3`.
         assert_eq!(usage_error("-x -v"), "Unknown option -x");
         assert_eq!(usage_error("--bogus -h"), "Unknown option --bogus");
         assert_eq!(usage_error("-x --no-wait -v"), "Unknown option -x");

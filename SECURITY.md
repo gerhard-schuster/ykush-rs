@@ -29,9 +29,10 @@ program:
 - denial of service by a board that stops answering: every read gives up
   after five seconds, and so does every write on macOS; on Linux the write
   runs inside the kernel, whose USB timeout bounds it rather than this
-  program, and on FreeBSD too, which waits at most five seconds for the
-  transfer and can return before the board took the report (FreeBSD 15.1
-  source, not measured)
+  program, and on FreeBSD too, which waits at most five seconds for an
+  interrupt OUT transfer and can return before the board took the report
+  (FreeBSD 15.1 source, not measured; whether the board has that endpoint
+  was not checked)
 - denial of service by holding the device open; on Linux an invocation of
   this program waits at most five seconds for the lock described below and
   then gives up, and on macOS another program that seizes the device makes

@@ -134,7 +134,7 @@ it, and `-l` lists it.
 
 The **switches** are compatible with the original, and a leading `ykush3` is accepted and
 ignored so existing invocations keep working. What the original tolerated silently - a
-stray first word, a second `-s`, an unknown option before the command - is an error here; the
+second `-s`, an unknown option after `ykush3` - is an error here; the
 [differences table](#where-it-differs-from-the-c-original) has the full list:
 
 ```
@@ -205,8 +205,9 @@ for the queue to stay quiet, since the answer may itself have been left behind. 
 left behind by an invocation that was killed between asking and reading is not taken for the
 answer to this one. Every read gives up after 5 seconds, and so does every write on
 macOS; on Linux the write runs inside the kernel, whose USB timeout bounds it, and on FreeBSD
-too, which waits at most 5 seconds for the transfer and can return before the board took the
-report (FreeBSD 15.1 source, not measured).
+too, which waits at most 5 seconds for an interrupt OUT transfer and can return before the board
+took the report (FreeBSD 15.1 source, not measured; whether the board has that endpoint was not
+checked).
 
 sysexits(3) has no code for a device that refuses a command. A refusal is a valid answer, not
 a protocol violation (`76`), so it gets the catch-all `69`. `77` is meant for permissions
@@ -737,8 +738,8 @@ without access to the node, a call exits `77` at once.
 | `--reset`, `--boot` | wait for an answer the board no longer sends | send without reading |
 | `-s` after the command | is ignored | works wherever it appears |
 | `-s` given twice | the last one wins silently | rejected as ambiguous |
-| a stray first word (`ykushcmd foo -u 1`) | silently skipped | rejected with a message |
-| an unknown option before the command (`-x -u 1`) | silently skipped, the command runs | rejected, exit `64`; the command does not run |
+| a stray first word (`ykushcmd foo -u 1`) | the help, returns `-1` | rejected with a message, exit `64` |
+| an unknown option before the command, after `ykush3` (`ykush3 -x -u 1`) | silently skipped, the command runs | rejected, exit `64`; the command does not run |
 | the external port | `4` for switching, `e` for configuring | both spellings everywhere |
 | I2C error status | only `0x00`/`0x01` told apart, otherwise a silent `0` | `0x02` and `0x03` are reported in words |
 | a command the board rejects | still exits with `0`, the answer is never read | the ACK is checked, exit `69`; an answer that does not fit, `76` |

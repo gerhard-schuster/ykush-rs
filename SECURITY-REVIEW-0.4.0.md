@@ -327,8 +327,8 @@ findings above; they record the state the correction was made on.
 | Statement in `SECURITY.md` | Assessment |
 |---|---|
 | Answers from the board are untrusted and checked against the request | Matches `src/ykush3.rs` and the 4000-round sweep test |
-| Every read and write gives up after 5 seconds (macOS in-process timer; Linux/FreeBSD write bounded by kernel USB transfer) | Matches `TIMEOUT` and the `Link` implementation in `src/device.rs` |
-| Serial numbers and `argv` sanitised before reaching the terminal | Matches `src/sanitize.rs` and all call sites in `src/device.rs`, `src/cli.rs`, `src/main.rs` |
+| Every read gives up after 5 seconds, and so does every write on macOS (in-process timer); on Linux and FreeBSD the kernel bounds the write | Matches `TIMEOUT` and the `Link` implementation in `src/device.rs` |
+| Serial numbers and `argv` sanitised before reaching the terminal | Matches `src/sanitize.rs` and its call sites in `src/device.rs` and `src/main.rs`, which sanitises `argv` before parsing it |
 | macOS exclusive open; Linux advisory `flock` on `/dev/hidrawN` (does not coordinate with `ykushcmd`); FreeBSD single-open `hidraw` + `sysctl` discovery + single-node polling while waiting | Matches `src/device.rs` and `src/lock.rs` |
 | Known limitations: duplicate serial numbers merged, resync via firmware version query + 50 ms quiet window | Accurately documented in `SECURITY.md` |
 
