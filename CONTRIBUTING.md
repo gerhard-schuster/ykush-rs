@@ -54,6 +54,7 @@ free license. `doc/README.md` links to them, and that is where a new source goes
 ```
 cargo test                                  # has to pass
 cargo clippy --all-targets                  # has to be silent
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps   # has to be silent
 cargo test -- --ignored --test-threads=1    # only with a board attached
 ```
 

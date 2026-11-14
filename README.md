@@ -518,7 +518,7 @@ cargo test -- --ignored --test-threads=1      # 11 more: 9 need a board, 2 only
 ```
 
 Every push runs the first line on macOS and on Linux, along with `cargo fmt --check`, `cargo clippy`
-with warnings denied, and a build against the `rust-version` from `Cargo.toml` so that
+and `cargo doc` with warnings denied, and a build against the `rust-version` from `Cargo.toml` so that
 figure stays honest.
 
 The second run **must** be single threaded. On Linux a second open of the board is not
